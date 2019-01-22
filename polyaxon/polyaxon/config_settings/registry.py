@@ -10,7 +10,7 @@ REGISTRY_PASSWORD = config.get_string('POLYAXON_REGISTRY_PASSWORD', is_optional=
 REGISTRY_HOST_NAME = config.get_string('POLYAXON_REGISTRY_HOST', is_optional=True)
 REGISTRY_PORT = config.get_string('POLYAXON_REGISTRY_PORT', is_optional=True)
 REGISTRY_NODE_PORT = config.get_string('POLYAXON_REGISTRY_NODE_PORT', is_optional=True)
-REGISTRY_HOST = '{}:{}'.format('192.168.1.50', REGISTRY_NODE_PORT)
+REGISTRY_HOST = '{}:{}'.format('192.168.1.49', '5000')
 PRIVATE_REGISTRIES_PREFIX = 'POLYAXON_PRIVATE_REGISTRY_'
 
 
