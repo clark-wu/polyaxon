@@ -4,7 +4,7 @@ import { Reducer } from 'redux';
 
 import { actionTypes, GroupAction } from '../actions/group';
 import { GroupSchema } from '../constants/schemas';
-import { STOPPED } from '../constants/statuses';
+import { STOPPING } from '../constants/statuses';
 import { GroupModel, GroupsEmptyState, GroupStateSchema } from '../models/group';
 import { ProjectsEmptyState, ProjectStateSchema } from '../models/project';
 import { LastFetchedNames } from '../models/utils';
@@ -12,6 +12,13 @@ import { LastFetchedNames } from '../models/utils';
 export const groupsReducer: Reducer<GroupStateSchema> =
   (state: GroupStateSchema = GroupsEmptyState, action: GroupAction) => {
     let newState = {...state};
+
+    const setGroupRelated = (group: GroupModel) => {
+      if (group.experiments == null) {
+        group.experiments = [];
+      }
+      return group;
+    };
 
     const processGroup = (group: GroupModel) => {
       const uniqueName = group.unique_name;
@@ -21,13 +28,15 @@ export const groupsReducer: Reducer<GroupStateSchema> =
       if (!_.includes(newState.uniqueNames, uniqueName)) {
         newState.uniqueNames.push(uniqueName);
       }
+      if (_.isNil(group.deleted)) {
+        group.deleted = false;
+      }
       const normalizedGroups = normalize(group, GroupSchema).entities.groups;
       newState.byUniqueNames[uniqueName] = {
         ...newState.byUniqueNames[uniqueName], ...normalizedGroups[uniqueName]
       };
-      if (newState.byUniqueNames[uniqueName].experiments == null) {
-        newState.byUniqueNames[uniqueName].experiments = [];
-      }
+      setGroupRelated(newState.byUniqueNames[uniqueName]);
+
       return newState;
     };
 
@@ -48,13 +57,33 @@ export const groupsReducer: Reducer<GroupStateSchema> =
             names: state.lastFetched.names.filter((name) => name !== action.groupName)
           },
         };
+      case actionTypes.ARCHIVE_GROUP:
+        return {
+          ...state,
+          byUniqueNames: {
+            ...state.byUniqueNames,
+            [action.groupName]: {
+              ...state.byUniqueNames[action.groupName], deleted: true
+            }
+          },
+        };
+      case actionTypes.RESTORE_GROUP:
+        return {
+          ...state,
+          byUniqueNames: {
+            ...state.byUniqueNames,
+            [action.groupName]: {
+              ...state.byUniqueNames[action.groupName], deleted: false
+            }
+          },
+        };
       case actionTypes.STOP_GROUP:
         return {
           ...state,
           byUniqueNames: {
             ...state.byUniqueNames,
             [action.groupName]: {
-              ...state.byUniqueNames[action.groupName], last_status: STOPPED
+              ...state.byUniqueNames[action.groupName], last_status: STOPPING
             }
           },
         };
@@ -91,7 +120,7 @@ export const groupsReducer: Reducer<GroupStateSchema> =
       case actionTypes.UPDATE_GROUP:
         return {
           ...state,
-          byUniqueNames: {...state.byUniqueNames, [action.group.unique_name]: action.group}
+          byUniqueNames: {...state.byUniqueNames, [action.group.unique_name]: setGroupRelated(action.group)}
         };
       case actionTypes.REQUEST_GROUPS:
         newState.lastFetched = new LastFetchedNames();

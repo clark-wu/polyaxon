@@ -1,5 +1,9 @@
 import uuid
 
+from typing import Dict, Optional
+
+from hestia.datetime_typing import AwareDT
+
 from django.db import models
 from django.utils import timezone
 
@@ -59,35 +63,46 @@ class LastStatusMixin(object):
     STATUSES = None
 
     @property
-    def last_status(self):
+    def last_status(self) -> Optional[str]:
+        if not hasattr(self, 'status'):
+            return None
         return self.status.status if self.status else None
 
     @property
-    def is_running(self):
+    def is_running(self) -> bool:
         return self.STATUSES.is_running(self.last_status)
 
     @property
-    def is_done(self):
+    def is_stoppable(self) -> bool:
+        return self.STATUSES.is_stoppable(self.last_status)
+
+    @property
+    def is_done(self) -> bool:
         return self.STATUSES.is_done(self.last_status)
 
     @property
-    def failed(self):
+    def failed(self) -> bool:
         return self.STATUSES.failed(self.last_status)
 
     @property
-    def succeeded(self):
+    def succeeded(self) -> bool:
         return self.STATUSES.succeeded(self.last_status)
 
     @property
-    def done(self):
+    def done(self) -> bool:
         return self.STATUSES.done(self.last_status)
 
     @property
-    def stopped(self):
+    def stopped(self) -> bool:
         return self.STATUSES.stopped(self.last_status)
 
-    def last_status_before(self, status_date):
+    def last_status_before(self, status_date: AwareDT) -> str:
         raise NotImplemented  # noqa
 
-    def set_status(self, status, created_at=None, message=None, traceback=None, **kwargs):
+    def set_status(self,
+                   status: str,
+                   created_at: AwareDT = None,
+                   message: str = None,
+                   traceback: Dict = None,
+                   **kwargs) -> None:
         raise NotImplemented  # noqa

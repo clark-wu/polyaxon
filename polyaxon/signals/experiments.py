@@ -1,11 +1,6 @@
 import logging
 
-from hestia.signal_decorators import (
-    check_specification,
-    ignore_raw,
-    ignore_updates,
-    ignore_updates_pre
-)
+from hestia.signal_decorators import ignore_raw, ignore_updates, ignore_updates_pre
 
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
@@ -18,8 +13,7 @@ from db.models.experiment_jobs import ExperimentJob
 from db.models.experiments import Experiment, ExperimentMetric
 from event_manager.events.experiment import EXPERIMENT_NEW_METRIC
 from libs.repos.utils import assign_code_reference
-from polyaxon.celery_api import celery_app
-from polyaxon.settings import SchedulerCeleryTasks
+from signals.names import set_name
 from signals.outputs import set_outputs, set_outputs_refs
 from signals.persistence import set_persistence
 from signals.tags import set_tags
@@ -39,10 +33,14 @@ def experiment_pre_save(sender, **kwargs):
     set_persistence(instance=instance)
     set_outputs(instance=instance)
     set_outputs_refs(instance=instance)
+    set_name(instance=instance, query=Experiment.all)
     if not instance.specification or not instance.specification.build:
         return
 
-    assign_code_reference(instance)
+    if instance.is_independent:
+        assign_code_reference(instance)
+    else:
+        instance.code_reference = instance.experiment_group.code_reference
 
 
 @receiver(post_save, sender=Experiment, dispatch_uid="experiment_post_save")
@@ -51,7 +49,6 @@ def experiment_pre_save(sender, **kwargs):
 def experiment_post_save(sender, **kwargs):
     instance = kwargs['instance']
     instance.set_status(ExperimentLifeCycle.CREATED)
-
     if instance.is_independent:
         # TODO: Clean outputs and logs
         pass
@@ -82,17 +79,3 @@ def experiment_metric_post_save(sender, **kwargs):
     experiment.save(update_fields=['last_metric'])
     auditor.record(event_type=EXPERIMENT_NEW_METRIC,
                    instance=experiment)
-
-
-@receiver(post_save, sender=Experiment, dispatch_uid="start_new_experiment")
-@check_specification
-@ignore_updates
-@ignore_raw
-def start_new_experiment(sender, **kwargs):
-    instance = kwargs['instance']
-    if instance.is_independent or instance.is_clone:
-        # Start building the experiment and then Schedule it to be picked by the spawners
-        celery_app.send_task(
-            SchedulerCeleryTasks.EXPERIMENTS_BUILD,
-            kwargs={'experiment_id': instance.id},
-            countdown=1)

@@ -1,3 +1,5 @@
+import uuid
+
 from scheduler.spawners.experiment_spawner import ExperimentSpawner
 from scheduler.spawners.templates.env_vars import get_env_var
 from schemas.environments import MXNetClusterConfig
@@ -10,14 +12,22 @@ class MXNetSpawner(ExperimentSpawner):
     WORKER_SERVICE = False
     SERVER_SERVICE = False
 
+    def create_job_uuids(self):
+        job_uuids = super().create_job_uuids()
+        job_uuids[TaskType.WORKER] = [
+            uuid.uuid4().hex for _ in range(self.get_n_pods(task_type=TaskType.WORKER))]
+        job_uuids[TaskType.SERVER] = [
+            uuid.uuid4().hex for _ in range(self.get_n_pods(task_type=TaskType.PS))]
+        return job_uuids
+
     def get_env_vars(self, task_type, task_idx):
         role = TaskType.SCHEDULER if task_type == TaskType.MASTER else task_type
         env_vars = [
             get_env_var(name='DMLC_NUM_WORKER', value=self.get_n_pods(TaskType.WORKER)),
             get_env_var(name='DMLC_NUM_SERVER', value=self.get_n_pods(TaskType.SERVER)),
-            get_env_var(name='DMLC_PS_ROOT_URI', value=self.pod_manager.get_job_name(
+            get_env_var(name='DMLC_PS_ROOT_URI', value=self.resource_manager.get_resource_name(
                 task_type=TaskType.MASTER, task_idx=0)),
-            get_env_var(name='DMLC_PS_ROOT_PORT', value=self.pod_manager.ports[0]),
+            get_env_var(name='DMLC_PS_ROOT_PORT', value=self.ports[0]),
             get_env_var(name='DMLC_ROLE', value=role)
         ]
         if task_type == TaskType.SERVER:
@@ -138,22 +148,25 @@ class MXNetSpawner(ExperimentSpawner):
     def get_cluster(self):
         cluster_def, _ = self.spec.cluster_def
 
-        job_name = self.pod_manager.get_job_name(task_type=TaskType.MASTER, task_idx=0)
+        resource_name = self.resource_manager.get_resource_name(task_type=TaskType.MASTER,
+                                                                task_idx=0)
         cluster_config = {
-            TaskType.MASTER: [self._get_pod_address(job_name)]
+            TaskType.MASTER: [self._get_pod_address(resource_name)]
         }
 
         workers = []
         for i in range(cluster_def.get(TaskType.WORKER, 0)):
-            job_name = self.pod_manager.get_job_name(task_type=TaskType.WORKER, task_idx=i)
-            workers.append(self._get_pod_address(job_name))
+            resource_name = self.resource_manager.get_resource_name(task_type=TaskType.WORKER,
+                                                                    task_idx=i)
+            workers.append(self._get_pod_address(resource_name))
 
         cluster_config[TaskType.WORKER] = workers
 
         servers = []
         for i in range(cluster_def.get(TaskType.SERVER, 0)):
-            job_name = self.pod_manager.get_job_name(task_type=TaskType.SERVER, task_idx=i)
-            servers.append(self._get_pod_address(job_name))
+            resource_name = self.resource_manager.get_resource_name(task_type=TaskType.SERVER,
+                                                                    task_idx=i)
+            servers.append(self._get_pod_address(resource_name))
 
         cluster_config[TaskType.SERVER] = servers
 

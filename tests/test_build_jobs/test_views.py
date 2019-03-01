@@ -35,7 +35,6 @@ class TestProjectBuildListViewV1(BaseViewTest):
     factory_class = BuildJobFactory
     num_objects = 3
     HAS_AUTH = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -312,6 +311,8 @@ class TestBuildDetailViewV1(BaseViewTest):
     model_class = BuildJob
     factory_class = BuildJobFactory
     HAS_AUTH = True
+    HAS_INTERNAL = True
+    INTERNAL_SERVICE = InternalServices.DOCKERIZER
 
     def setUp(self):
         super().setUp()
@@ -326,6 +327,10 @@ class TestBuildDetailViewV1(BaseViewTest):
 
     def test_get(self):
         resp = self.auth_client.get(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data == self.serializer_class(self.object_query).data
+
+        resp = self.internal_client.get(self.url)
         assert resp.status_code == status.HTTP_200_OK
         assert resp.data == self.serializer_class(self.object_query).data
 
@@ -380,16 +385,40 @@ class TestBuildDetailViewV1(BaseViewTest):
         assert new_object.user == self.object.user
         assert new_object.description != self.object.description
         assert new_object.description == new_description
+        dockerfile = 'foo'
+        data = {'dockerfile': dockerfile}
+        assert new_object.dockerfile is None
+        resp = self.auth_client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.dockerfile == dockerfile
 
-    def test_delete_archives_and_schedules_stop(self):
+        dockerfile = 'boo'
+        data = {'dockerfile': dockerfile}
+        assert new_object.dockerfile == 'foo'
+        resp = self.internal_client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.dockerfile == dockerfile
+
+        # Update name
+        data = {'name': 'new_name'}
+        assert new_object.name is None
+        resp = self.internal_client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.name == data['name']
+
+    def test_delete_archives_deletes_immediately_and_schedules_stop(self):
         self.object.set_status(JobLifeCycle.SCHEDULED)
         assert self.model_class.objects.count() == 1
         with patch('scheduler.tasks.build_jobs.build_jobs_stop.apply_async') as spawner_mock_stop:
             resp = self.auth_client.delete(self.url)
-        assert spawner_mock_stop.call_count == 1
+        assert spawner_mock_stop.called
         assert resp.status_code == status.HTTP_204_NO_CONTENT
+        # Deleted
         assert self.model_class.objects.count() == 0
-        assert self.model_class.all.count() == 1
+        assert self.model_class.all.count() == 0
 
     def test_delete_archives_and_schedules_deletion(self):
         self.object.set_status(JobLifeCycle.SCHEDULED)
@@ -399,7 +428,38 @@ class TestBuildDetailViewV1(BaseViewTest):
             resp = self.auth_client.delete(self.url)
         assert spawner_mock_stop.call_count == 1
         assert resp.status_code == status.HTTP_204_NO_CONTENT
+        # Patched
         assert self.model_class.objects.count() == 0
+        assert self.model_class.all.count() == 1
+
+    def test_archive_schedule_deletion(self):
+        self.object.set_status(JobLifeCycle.SCHEDULED)
+        assert self.model_class.objects.count() == 1
+        with patch('scheduler.tasks.build_jobs.'
+                   'build_jobs_schedule_deletion.apply_async') as spawner_mock_stop:
+            resp = self.auth_client.post(self.url + 'archive/')
+        assert resp.status_code == status.HTTP_200_OK
+        assert spawner_mock_stop.call_count == 1
+        assert self.model_class.objects.count() == 1
+        assert self.model_class.all.count() == 1
+
+    def test_archive_schedule_archives_and_schedules_stop(self):
+        self.object.set_status(JobLifeCycle.SCHEDULED)
+        assert self.model_class.objects.count() == 1
+        with patch('scheduler.tasks.build_jobs.build_jobs_stop.apply_async') as spawner_mock_stop:
+            resp = self.auth_client.post(self.url + 'archive/')
+        assert resp.status_code == status.HTTP_200_OK
+        assert spawner_mock_stop.call_count == 1
+        assert self.model_class.objects.count() == 0
+        assert self.model_class.all.count() == 1
+
+    def test_restore(self):
+        self.object.archive()
+        assert self.model_class.objects.count() == 0
+        assert self.model_class.all.count() == 1
+        resp = self.auth_client.post(self.url + 'restore/')
+        assert resp.status_code == status.HTTP_200_OK
+        assert self.model_class.objects.count() == 1
         assert self.model_class.all.count() == 1
 
 
@@ -410,6 +470,8 @@ class TestBuildStatusListViewV1(BaseViewTest):
     factory_class = BuildJobStatusFactory
     num_objects = 3
     HAS_AUTH = True
+    HAS_INTERNAL = True
+    INTERNAL_SERVICE = InternalServices.SIDECAR
 
     def setUp(self):
         super().setUp()
@@ -429,6 +491,9 @@ class TestBuildStatusListViewV1(BaseViewTest):
 
     def test_get(self):
         resp = self.auth_client.get(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+
+        resp = self.internal_client.get(self.url)
         assert resp.status_code == status.HTTP_200_OK
 
         assert resp.data['next'] is None
@@ -475,6 +540,28 @@ class TestBuildStatusListViewV1(BaseViewTest):
         last_object = self.model_class.objects.last()
         assert last_object.job == self.job
         assert last_object.status == data['status']
+
+        # Create with message and traceback
+        data = {'status': JobLifeCycle.FAILED,
+                'message': 'message1',
+                'traceback': 'traceback1'}
+        resp = self.auth_client.post(self.url, data)
+        assert resp.status_code == status.HTTP_201_CREATED
+        assert self.model_class.objects.count() == self.num_objects + 3
+        last_object = self.model_class.objects.last()
+        assert last_object.job == self.job
+        assert last_object.status == data['status']
+        assert last_object.message == data['message']
+        assert last_object.traceback == data['traceback']
+
+        resp = self.internal_client.post(self.url, data)
+        assert resp.status_code == status.HTTP_201_CREATED
+        assert self.model_class.objects.count() == self.num_objects + 4
+        last_object = self.model_class.objects.last()
+        assert last_object.job == self.job
+        assert last_object.status == data['status']
+        assert last_object.message == data['message']
+        assert last_object.traceback == data['traceback']
 
 
 @pytest.mark.build_jobs_mark
@@ -546,7 +633,6 @@ class TestStopBuildViewV1(BaseViewTest):
 class TestBuildLogsViewV1(BaseViewTest):
     num_log_lines = 10
     HAS_AUTH = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -615,7 +701,6 @@ class TestBuildLogsViewV1(BaseViewTest):
 @pytest.mark.build_jobs_mark
 class TestBuildHeartBeatViewV1(BaseViewTest):
     HAS_AUTH = True
-    DISABLE_RUNNER = True
     HAS_INTERNAL = True
     INTERNAL_SERVICE = InternalServices.SIDECAR
 

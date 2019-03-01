@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+#noqa
 
 import sys
 
@@ -19,7 +20,7 @@ class PyTest(TestCommand):
 
 
 setup(name='polyaxon-sidecar',
-      version='0.3.7',
+      version='0.4.1',
       description='Polyaxon sidecar.',
       maintainer='Mourad Mourafiq',
       maintainer_email='mourad@polyaxon.com',
@@ -39,8 +40,8 @@ setup(name='polyaxon-sidecar',
       ],
       install_requires=[
           'polyaxon-k8s==0.3.7',
-          'polyaxon-client==0.3.7',
-          'ocular==0.0.6',
+          'polyaxon-client==0.4.1',
+          'ocular==0.1.2',
           'Unipath==1.1'
       ],
       classifiers=[

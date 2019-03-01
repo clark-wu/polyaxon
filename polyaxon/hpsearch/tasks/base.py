@@ -1,9 +1,14 @@
+import traceback
+
 from hestia.np_utils import sanitize_np_types
+from rest_framework.exceptions import ValidationError
 
 import conf
 
+from constants.experiment_groups import ExperimentGroupLifeCycle
 from db.models.experiments import Experiment
 from db.redis.group_check import GroupChecks
+from hpsearch.exceptions import ExperimentGroupException
 from hpsearch.tasks.logger import logger
 from polyaxon.celery_api import celery_app
 from polyaxon.settings import SchedulerCeleryTasks
@@ -31,12 +36,20 @@ def create_group_experiments(experiment_group, suggestions):
     experiments = []
     for suggestion in suggestions:
         # We need to check if we should create or restart
-        experiment = Experiment.objects.create(
-            project_id=experiment_group.project_id,
-            user_id=experiment_group.user_id,
-            experiment_group=experiment_group,
-            config=specification.get_experiment_spec(matrix_declaration=suggestion).parsed_data,
-            code_reference_id=experiment_group.code_reference_id)
+        try:
+            experiment = Experiment.objects.create(
+                project_id=experiment_group.project_id,
+                user_id=experiment_group.user_id,
+                experiment_group=experiment_group,
+                config=specification.get_experiment_spec(matrix_declaration=suggestion).parsed_data,
+                code_reference_id=experiment_group.code_reference_id)
+        except ValidationError:
+            experiment_group.set_status(
+                ExperimentGroupLifeCycle.FAILED,
+                message='Experiment group could not create experiments, '
+                        'encountered a validation error.',
+                traceback=traceback.format_exc())
+            raise ExperimentGroupException()
         experiments.append(experiment)
 
     return experiments
@@ -49,7 +62,8 @@ def start_group_experiments(experiment_group):
             SchedulerCeleryTasks.EXPERIMENTS_GROUP_STOP_EXPERIMENTS,
             kwargs={'experiment_group_id': experiment_group.id,
                     'pending': True,
-                    'message': 'Early stopping'})
+                    'message': 'Early stopping'},
+            countdown=conf.get('GLOBAL_COUNTDOWN'))
         return
 
     experiment_to_start = experiment_group.n_experiments_to_start
@@ -57,13 +71,15 @@ def start_group_experiments(experiment_group):
         # This could happen due to concurrency or not created yet experiments
         return (experiment_group.pending_experiments.exists() or
                 not experiment_group.scheduled_all_suggestions())
-    pending_experiments = experiment_group.pending_experiments[:experiment_to_start]
+    pending_experiments = experiment_group.pending_experiments.values_list(
+        'id', flat=True)[:experiment_to_start]
     n_pending_experiment = experiment_group.pending_experiments.count()
 
     for experiment in pending_experiments:
         celery_app.send_task(
             SchedulerCeleryTasks.EXPERIMENTS_BUILD,
-            kwargs={'experiment_id': experiment.id})
+            kwargs={'experiment_id': experiment},
+            countdown=conf.get('GLOBAL_COUNTDOWN'))
 
     return (n_pending_experiment - experiment_to_start > 0 or
             not experiment_group.scheduled_all_suggestions())
@@ -72,7 +88,8 @@ def start_group_experiments(experiment_group):
 def check_group_experiments_finished(experiment_group_id, auto_retry=False):
     celery_app.send_task(SchedulerCeleryTasks.EXPERIMENTS_GROUP_CHECK_FINISHED,
                          kwargs={'experiment_group_id': experiment_group_id,
-                                 'auto_retry': auto_retry})
+                                 'auto_retry': auto_retry},
+                         countdown=conf.get('GLOBAL_COUNTDOWN'))
 
 
 def should_group_start(experiment_group_id, task, auto_retry):

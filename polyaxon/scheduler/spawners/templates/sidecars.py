@@ -5,20 +5,18 @@ from kubernetes import client
 
 import conf
 
-from scheduler.spawners.templates import constants
-from scheduler.spawners.templates.env_vars import get_env_var, get_service_env_vars
+from scheduler.spawners.templates.env_vars import get_env_var, get_internal_env_vars
 
 
-def get_sidecar_env_vars(job_name, job_container_name, internal_health_check_url):
-    return [
-        get_env_var(name='POLYAXON_POD_ID', value=job_name),
+def get_sidecar_env_vars(namespace, resource_name, job_container_name, internal_health_check_url):
+    env_vars = get_internal_env_vars(namespace=namespace,
+                                     service_internal_header=InternalServices.SIDECAR,
+                                     authentication_type=AuthenticationTypes.INTERNAL_TOKEN,
+                                     include_internal_token=True)
+    return env_vars + [
+        get_env_var(name='POLYAXON_POD_ID', value=resource_name),
         get_env_var(name='POLYAXON_CONTAINER_ID', value=job_container_name),
         get_env_var(name='POLYAXON_INTERNAL_HEALTH_CHECK_URL', value=internal_health_check_url),
-        get_env_var(name='POLYAXON_AUTHENTICATION_TYPE', value=AuthenticationTypes.INTERNAL_TOKEN),
-        get_env_var(name=constants.CONFIG_MAP_INTERNAL_HEADER,
-                    value=conf.get('HEADERS_INTERNAL').replace('_', '-')),
-        get_env_var(name=constants.CONFIG_MAP_INTERNAL_HEADER_SERVICE,
-                    value=InternalServices.SIDECAR),
     ]
 
 
@@ -33,7 +31,7 @@ def get_sidecar_command():
     return ["python3", "sidecar/__main__.py"]
 
 
-def get_sidecar_container(job_name,
+def get_sidecar_container(resource_name,
                           job_container_name,
                           sidecar_container_name,
                           sidecar_docker_image,
@@ -42,13 +40,14 @@ def get_sidecar_container(job_name,
                           sidecar_config,
                           sidecar_args,
                           internal_health_check_url,
+                          volume_mounts,
                           env_vars=None):
     """Return a pod sidecar container."""
     env_vars = to_list(env_vars) if env_vars else []
-    env_vars += get_sidecar_env_vars(job_name=job_name,
+    env_vars += get_sidecar_env_vars(namespace=namespace,
+                                     resource_name=resource_name,
                                      job_container_name=job_container_name,
                                      internal_health_check_url=internal_health_check_url)
-    env_vars += get_service_env_vars(namespace=namespace)
     for k, v in sidecar_config.items():
         env_vars.append(get_env_var(name=k, value=v))
     return client.V1Container(name=sidecar_container_name,
@@ -56,4 +55,5 @@ def get_sidecar_container(job_name,
                               image_pull_policy=sidecar_docker_image_pull_policy,
                               command=get_sidecar_command(),
                               env=env_vars,
+                              volume_mounts=volume_mounts,
                               args=sidecar_args)

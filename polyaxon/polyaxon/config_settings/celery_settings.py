@@ -45,6 +45,9 @@ CELERY_HARD_TIME_LIMIT_DELAY = config.get_int('POLYAXON_CELERY_HARD_TIME_LIMIT_D
 HEALTH_CHECK_WORKER_TIMEOUT = config.get_int('POLYAXON_HEALTH_CHECK_WORKER_TIMEOUT',
                                              is_optional=True,
                                              default=4)
+CELERYD_MAX_TASKS_PER_CHILD = config.get_int('POLYAXON_CELERYD_MAX_TASKS_PER_CHILD',
+                                             is_optional=True,
+                                             default=100)
 GROUP_CHUNKS = config.get_int('POLYAXON_GROUP_CHUNKS',
                               is_optional=True,
                               default=50)
@@ -155,19 +158,12 @@ class CronsCeleryTasks(object):
     CLEAN_NOTIFICATIONS = 'clean_notifications'
 
     DELETE_ARCHIVED_PROJECTS = 'delete_archived_projects'
-    DELETE_ARCHIVED_PROJECT = 'delete_archived_project'
     DELETE_ARCHIVED_EXPERIMENT_GROUPS = 'delete_archived_experiment_groups'
-    DELETE_ARCHIVED_EXPERIMENT_GROUP = 'delete_archived_experiment_group'
     DELETE_ARCHIVED_EXPERIMENTS = 'delete_archived_experiments'
-    DELETE_ARCHIVED_EXPERIMENT = 'delete_archived_experiment'
     DELETE_ARCHIVED_JOBS = 'delete_archived_jobs'
-    DELETE_ARCHIVED_JOB = 'delete_archived_job'
     DELETE_ARCHIVED_BUILD_JOBS = 'delete_archived_build_jobs'
-    DELETE_ARCHIVED_BUILD_JOB = 'delete_archived_build_job'
     DELETE_ARCHIVED_NOTEBOOK_JOBS = 'delete_archived_notebook_jobs'
-    DELETE_ARCHIVED_NOTEBOOK_JOB = 'delete_archived_notebook_job'
     DELETE_ARCHIVED_TENSORBOARD_JOBS = 'delete_archived_tensorboard_jobs'
-    DELETE_ARCHIVED_TENSORBOARD_JOB = 'delete_archived_tensorboard_job'
 
 
 class ReposCeleryTasks(object):
@@ -256,6 +252,7 @@ class SchedulerCeleryTasks(object):
     EXPERIMENTS_SCHEDULE_DELETION = 'experiments_schedule_deletion'
 
     EXPERIMENTS_GROUP_CREATE = 'experiments_group_create'
+    EXPERIMENTS_GROUP_STOP = 'experiments_group_stop'
     EXPERIMENTS_GROUP_STOP_EXPERIMENTS = 'experiments_group_stop_experiments'
     EXPERIMENTS_GROUP_CHECK_FINISHED = 'experiments_group_check_finished'
     EXPERIMENTS_GROUP_SCHEDULE_DELETION = 'experiments_group_schedule_deletion'
@@ -288,6 +285,14 @@ class SchedulerCeleryTasks(object):
     STORES_SCHEDULE_DATA_DELETION = 'stores_schedule_data_deletion'
     STORES_SCHEDULE_OUTPUTS_DELETION = 'stores_schedule_outputs_deletion'
     STORES_SCHEDULE_LOGS_DELETION = 'stores_schedule_logs_deletion'
+
+    DELETE_ARCHIVED_PROJECT = 'delete_archived_project'
+    DELETE_ARCHIVED_EXPERIMENT_GROUP = 'delete_archived_experiment_group'
+    DELETE_ARCHIVED_EXPERIMENT = 'delete_archived_experiment'
+    DELETE_ARCHIVED_JOB = 'delete_archived_job'
+    DELETE_ARCHIVED_BUILD_JOB = 'delete_archived_build_job'
+    DELETE_ARCHIVED_NOTEBOOK_JOB = 'delete_archived_notebook_job'
+    DELETE_ARCHIVED_TENSORBOARD_JOB = 'delete_archived_tensorboard_job'
 
 
 class HPCeleryTasks(object):
@@ -338,6 +343,7 @@ class CeleryQueues(object):
     SCHEDULER_STORES = config.get_string('POLYAXON_QUEUES_SCHEDULER_STORES')
     SCHEDULER_BUILD_JOBS = config.get_string('POLYAXON_QUEUES_SCHEDULER_BUILD_JOBS')
     SCHEDULER_JOBS = config.get_string('POLYAXON_QUEUES_SCHEDULER_JOBS')
+    SCHEDULER_CLEAN = config.get_string('POLYAXON_QUEUES_SCHEDULER_CLEAN')
 
     PIPELINES_HEALTH = config.get_string('POLYAXON_QUEUES_PIPELINES_HEALTH')
     PIPELINES = config.get_string('POLYAXON_QUEUES_PIPELINES')
@@ -445,6 +451,8 @@ CELERY_TASK_ROUTES = {
     # Scheduler groups
     SchedulerCeleryTasks.EXPERIMENTS_GROUP_CREATE:
         {'queue': CeleryQueues.SCHEDULER_EXPERIMENT_GROUPS},
+    SchedulerCeleryTasks.EXPERIMENTS_GROUP_STOP:
+        {'queue': CeleryQueues.SCHEDULER_EXPERIMENT_GROUPS},
     SchedulerCeleryTasks.EXPERIMENTS_GROUP_STOP_EXPERIMENTS:
         {'queue': CeleryQueues.SCHEDULER_EXPERIMENT_GROUPS},
     SchedulerCeleryTasks.EXPERIMENTS_GROUP_CHECK_FINISHED:
@@ -508,6 +516,23 @@ CELERY_TASK_ROUTES = {
     SchedulerCeleryTasks.STORES_SCHEDULE_LOGS_DELETION:
         {'queue': CeleryQueues.SCHEDULER_STORES},
 
+    # Scheduler deletion
+    SchedulerCeleryTasks.DELETE_ARCHIVED_PROJECT:
+        {'queue': CeleryQueues.SCHEDULER_CLEAN},
+    SchedulerCeleryTasks.DELETE_ARCHIVED_EXPERIMENT_GROUP:
+        {'queue': CeleryQueues.SCHEDULER_CLEAN},
+    SchedulerCeleryTasks.DELETE_ARCHIVED_EXPERIMENT:
+        {'queue': CeleryQueues.SCHEDULER_CLEAN},
+    SchedulerCeleryTasks.DELETE_ARCHIVED_JOB:
+        {'queue': CeleryQueues.SCHEDULER_CLEAN},
+    SchedulerCeleryTasks.DELETE_ARCHIVED_BUILD_JOB:
+        {'queue': CeleryQueues.SCHEDULER_CLEAN},
+    SchedulerCeleryTasks.DELETE_ARCHIVED_NOTEBOOK_JOB:
+        {'queue': CeleryQueues.SCHEDULER_CLEAN},
+    SchedulerCeleryTasks.DELETE_ARCHIVED_TENSORBOARD_JOB:
+        {'queue': CeleryQueues.SCHEDULER_CLEAN},
+
+
     # Crons health
     CronsCeleryTasks.CRONS_HEALTH:
         {'queue': CeleryQueues.CRONS_HEALTH},
@@ -538,31 +563,17 @@ CELERY_TASK_ROUTES = {
 
     CronsCeleryTasks.DELETE_ARCHIVED_PROJECTS:
         {'queue': CeleryQueues.CRONS_CLEAN},
-    CronsCeleryTasks.DELETE_ARCHIVED_PROJECT:
-        {'queue': CeleryQueues.CRONS_CLEAN},
     CronsCeleryTasks.DELETE_ARCHIVED_EXPERIMENT_GROUPS:
-        {'queue': CeleryQueues.CRONS_CLEAN},
-    CronsCeleryTasks.DELETE_ARCHIVED_EXPERIMENT_GROUP:
         {'queue': CeleryQueues.CRONS_CLEAN},
     CronsCeleryTasks.DELETE_ARCHIVED_EXPERIMENTS:
         {'queue': CeleryQueues.CRONS_CLEAN},
-    CronsCeleryTasks.DELETE_ARCHIVED_EXPERIMENT:
-        {'queue': CeleryQueues.CRONS_CLEAN},
     CronsCeleryTasks.DELETE_ARCHIVED_JOBS:
-        {'queue': CeleryQueues.CRONS_CLEAN},
-    CronsCeleryTasks.DELETE_ARCHIVED_JOB:
         {'queue': CeleryQueues.CRONS_CLEAN},
     CronsCeleryTasks.DELETE_ARCHIVED_BUILD_JOBS:
         {'queue': CeleryQueues.CRONS_CLEAN},
-    CronsCeleryTasks.DELETE_ARCHIVED_BUILD_JOB:
-        {'queue': CeleryQueues.CRONS_CLEAN},
     CronsCeleryTasks.DELETE_ARCHIVED_NOTEBOOK_JOBS:
         {'queue': CeleryQueues.CRONS_CLEAN},
-    CronsCeleryTasks.DELETE_ARCHIVED_NOTEBOOK_JOB:
-        {'queue': CeleryQueues.CRONS_CLEAN},
     CronsCeleryTasks.DELETE_ARCHIVED_TENSORBOARD_JOBS:
-        {'queue': CeleryQueues.CRONS_CLEAN},
-    CronsCeleryTasks.DELETE_ARCHIVED_TENSORBOARD_JOB:
         {'queue': CeleryQueues.CRONS_CLEAN},
 
     # HP health

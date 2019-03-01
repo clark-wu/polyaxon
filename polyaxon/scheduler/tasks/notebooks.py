@@ -1,5 +1,7 @@
 import logging
 
+import conf
+
 from constants.jobs import JobLifeCycle
 from db.getters.notebooks import get_valid_notebook
 from polyaxon.celery_api import celery_app
@@ -35,7 +37,8 @@ def projects_notebook_build(notebook_job_id):
         # The image already exists, so we can start the experiment right away
         celery_app.send_task(
             SchedulerCeleryTasks.PROJECTS_NOTEBOOK_START,
-            kwargs={'notebook_job_id': notebook_job_id})
+            kwargs={'notebook_job_id': notebook_job_id},
+            countdown=conf.get('GLOBAL_COUNTDOWN'))
         return
 
     if not build_status:
@@ -68,21 +71,20 @@ def projects_notebook_schedule_deletion(notebook_job_id):
 
     notebook_job.archive()
 
-    if not notebook_job.is_running:
-        return
-
-    project = notebook_job.project
-    celery_app.send_task(
-        SchedulerCeleryTasks.PROJECTS_NOTEBOOK_STOP,
-        kwargs={
-            'project_name': project.unique_name,
-            'project_uuid': project.uuid.hex,
-            'notebook_job_name': notebook_job.unique_name,
-            'notebook_job_uuid': notebook_job.uuid.hex,
-            'update_status': True,
-            'collect_logs': False,
-            'message': 'Notebook is scheduled for deletion.'
-        })
+    if notebook_job.is_stoppable:
+        project = notebook_job.project
+        celery_app.send_task(
+            SchedulerCeleryTasks.PROJECTS_NOTEBOOK_STOP,
+            kwargs={
+                'project_name': project.unique_name,
+                'project_uuid': project.uuid.hex,
+                'notebook_job_name': notebook_job.unique_name,
+                'notebook_job_uuid': notebook_job.uuid.hex,
+                'update_status': True,
+                'collect_logs': False,
+                'message': 'Notebook is scheduled for deletion.'
+            },
+            countdown=conf.get('GLOBAL_COUNTDOWN'))
 
 
 @celery_app.task(name=SchedulerCeleryTasks.PROJECTS_NOTEBOOK_STOP,

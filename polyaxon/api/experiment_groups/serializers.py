@@ -2,6 +2,7 @@ from rest_framework import fields, serializers
 from rest_framework.exceptions import ValidationError
 
 from api.utils.serializers.bookmarks import BookmarkedSerializerMixin
+from api.utils.serializers.names import NamesMixin
 from api.utils.serializers.tags import TagsSerializerMixin
 from db.models.experiment_groups import (
     ExperimentGroup,
@@ -48,10 +49,10 @@ class ExperimentGroupSerializer(serializers.ModelSerializer):
 
         extra_kwargs = {'group_type': {'read_only': True}}
 
-    def get_project(self, obj):
+    def get_project(self, obj: ExperimentGroup):
         return obj.project.unique_name
 
-    def get_user(self, obj):
+    def get_user(self, obj: ExperimentGroup):
         return obj.user.username
 
 
@@ -62,7 +63,9 @@ class BookmarkedExperimentGroupSerializer(ExperimentGroupSerializer, BookmarkedS
         fields = ExperimentGroupSerializer.Meta.fields + ('bookmarked',)
 
 
-class ExperimentGroupDetailSerializer(BookmarkedExperimentGroupSerializer, TagsSerializerMixin):
+class ExperimentGroupDetailSerializer(BookmarkedExperimentGroupSerializer,
+                                      TagsSerializerMixin,
+                                      NamesMixin):
     num_experiments = fields.SerializerMethodField()
     num_pending_experiments = fields.SerializerMethodField()
     num_running_experiments = fields.SerializerMethodField()
@@ -90,28 +93,28 @@ class ExperimentGroupDetailSerializer(BookmarkedExperimentGroupSerializer, TagsS
             'num_stopped_experiments',
         )
 
-    def get_num_experiments(self, obj):
+    def get_num_experiments(self, obj: ExperimentGroup) -> int:
         return obj.group_experiments.count()
 
-    def get_num_pending_experiments(self, obj):
+    def get_num_pending_experiments(self, obj: ExperimentGroup) -> int:
         return obj.pending_experiments.count()
 
-    def get_num_running_experiments(self, obj):
+    def get_num_running_experiments(self, obj: ExperimentGroup) -> int:
         return obj.running_experiments.count()
 
-    def get_num_scheduled_experiments(self, obj):
+    def get_num_scheduled_experiments(self, obj: ExperimentGroup) -> int:
         return obj.scheduled_experiments.count()
 
-    def get_num_succeeded_experiments(self, obj):
+    def get_num_succeeded_experiments(self, obj: ExperimentGroup) -> int:
         return obj.succeeded_experiments.count()
 
-    def get_num_failed_experiments(self, obj):
+    def get_num_failed_experiments(self, obj: ExperimentGroup) -> int:
         return obj.failed_experiments.count()
 
-    def get_num_stopped_experiments(self, obj):
+    def get_num_stopped_experiments(self, obj: ExperimentGroup) -> int:
         return obj.stopped_experiments.count()
 
-    def get_current_iteration(self, obj):
+    def get_current_iteration(self, obj: ExperimentGroup):
         return obj.iterations.count()
 
     def validate_content(self, content):
@@ -123,14 +126,17 @@ class ExperimentGroupDetailSerializer(BookmarkedExperimentGroupSerializer, TagsS
             raise ValidationError('Experiment group expects `content`.')
         return attrs
 
-    def update(self, instance, validated_data):
+    def update(self, instance: ExperimentGroup, validated_data) -> ExperimentGroup:
         validated_data = self.validated_tags(validated_data=validated_data,
                                              tags=instance.tags)
+        validated_data = self.validated_name(validated_data,
+                                             project=instance.project,
+                                             query=ExperimentGroup.all)
 
         return super().update(instance=instance, validated_data=validated_data)
 
 
-class ExperimentGroupCreateSerializer(ExperimentGroupSerializer):
+class ExperimentGroupCreateSerializer(ExperimentGroupSerializer, NamesMixin):
 
     class Meta(ExperimentGroupSerializer.Meta):
         fields = ExperimentGroupSerializer.Meta.fields + (
@@ -150,6 +156,15 @@ class ExperimentGroupCreateSerializer(ExperimentGroupSerializer):
         if self.initial_data.get('check_specification') and not attrs.get('content'):
             raise ValidationError('Experiment group expects `content`.')
         return attrs
+
+    def create(self, validated_data):
+        validated_data = self.validated_name(validated_data,
+                                             project=validated_data['project'],
+                                             query=ExperimentGroup.all)
+        try:
+            return super().create(validated_data)
+        except Exception as e:
+            raise ValidationError(e)
 
 
 class ExperimentGroupChartViewSerializer(serializers.ModelSerializer):

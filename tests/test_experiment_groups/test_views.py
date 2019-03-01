@@ -14,14 +14,17 @@ from api.experiment_groups.serializers import (
 from api.experiments.serializers import ExperimentMetricSerializer
 from constants.experiment_groups import ExperimentGroupLifeCycle
 from constants.experiments import ExperimentLifeCycle
+from constants.jobs import JobLifeCycle
 from constants.urls import API_V1
 from db.models.bookmarks import Bookmark
+from db.models.build_jobs import BuildJobStatus
 from db.models.experiment_groups import (
     ExperimentGroup,
     ExperimentGroupChartView,
     ExperimentGroupStatus
 )
 from db.models.experiments import Experiment, ExperimentMetric
+from factories.factory_build_jobs import BuildJobFactory
 from factories.factory_experiment_groups import (
     ExperimentGroupChartViewFactory,
     ExperimentGroupFactory,
@@ -45,7 +48,6 @@ class TestProjectExperimentGroupListViewV1(BaseViewTest):
     factory_class = ExperimentGroupFactory
     num_objects = 3
     HAS_AUTH = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -415,7 +417,6 @@ class TestExperimentGroupDetailViewV1(BaseViewTest):
     model_class = ExperimentGroup
     factory_class = ExperimentGroupFactory
     HAS_AUTH = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -440,7 +441,7 @@ class TestExperimentGroupDetailViewV1(BaseViewTest):
         assert resp.data['num_pending_experiments'] == 2
 
     def test_patch(self):
-        new_description = 'updated_xp_name'
+        new_description = 'updated_description'
         data = {'description': new_description}
         assert self.object.description != data['description']
         resp = self.auth_client.patch(self.url, data=data)
@@ -451,7 +452,14 @@ class TestExperimentGroupDetailViewV1(BaseViewTest):
         assert new_object.description == new_description
         assert new_object.experiments.count() == 2
 
-    def test_delete_archives_and_schedules_stop(self):
+        data = {'name': 'new_name'}
+        assert self.object.name is None
+        resp = self.auth_client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.name == data['name']
+
+    def test_delete_archives_deletes_immediately_and_schedules_stop(self):
         assert self.model_class.objects.count() == 1
         assert Experiment.objects.count() == 2
         experiment = ExperimentFactory(project=self.object.project,
@@ -467,9 +475,10 @@ class TestExperimentGroupDetailViewV1(BaseViewTest):
             resp = self.auth_client.delete(self.url)
         assert scheduler_mock.call_count == 1
         assert resp.status_code == status.HTTP_204_NO_CONTENT
+        # Delete
         assert self.model_class.objects.count() == 0
-        assert self.model_class.all.count() == 1
-        assert Experiment.all.count() == 3
+        assert self.model_class.all.count() == 0
+        assert Experiment.all.count() == 0
         assert Experiment.objects.count() == 0
 
     def test_delete_archives_and_schedules_deletion(self):
@@ -486,10 +495,68 @@ class TestExperimentGroupDetailViewV1(BaseViewTest):
             resp = self.auth_client.delete(self.url)
         assert scheduler_mock.call_count == 1
         assert resp.status_code == status.HTTP_204_NO_CONTENT
+        # Patched
         assert self.model_class.objects.count() == 0
         assert self.model_class.all.count() == 1
         assert Experiment.all.count() == 3
         assert Experiment.objects.count() == 0
+
+    def test_archive_schedule_deletion(self):
+        assert self.model_class.objects.count() == 1
+        experiment = ExperimentFactory(project=self.object.project,
+                                       experiment_group=self.object)
+        assert Experiment.objects.count() == 3
+        # Set one experiment to running with one job
+        experiment.set_status(ExperimentLifeCycle.SCHEDULED)
+        # Add job
+        ExperimentJobFactory(experiment=experiment)
+        with patch('scheduler.tasks.experiment_groups.'
+                   'experiments_group_schedule_deletion.apply_async') as spawner_mock_stop:
+            resp = self.auth_client.post(self.url + 'archive/')
+        assert resp.status_code == status.HTTP_200_OK
+        assert spawner_mock_stop.call_count == 1
+        assert self.model_class.objects.count() == 1
+        assert self.model_class.all.count() == 1
+        assert Experiment.all.count() == 3
+        assert Experiment.objects.count() == 3
+
+    def test_archive_schedule_archives_and_schedules_stop(self):
+        assert self.model_class.objects.count() == 1
+        experiment = ExperimentFactory(project=self.object.project,
+                                       experiment_group=self.object)
+        assert Experiment.objects.count() == 3
+        # Set the object to running
+        self.object.set_status(ExperimentGroupLifeCycle.RUNNING)
+        # Set one experiment to running with one job
+        experiment.set_status(ExperimentLifeCycle.SCHEDULED)
+        # Add job
+        ExperimentJobFactory(experiment=experiment)
+        with patch('scheduler.tasks.experiment_groups.'
+                   'experiments_group_stop_experiments.apply_async') as spawner_mock_stop:
+            resp = self.auth_client.post(self.url + 'archive/')
+        assert resp.status_code == status.HTTP_200_OK
+        assert spawner_mock_stop.call_count == 1
+        assert self.model_class.objects.count() == 0
+        assert self.model_class.all.count() == 1
+        assert Experiment.all.count() == 3
+        assert Experiment.objects.count() == 0
+
+    def test_restore(self):
+        ExperimentFactory(project=self.object.project, experiment_group=self.object)
+        assert Experiment.objects.count() == 3
+        self.object.archive()
+        assert self.model_class.objects.count() == 0
+        assert self.model_class.all.count() == 1
+        assert Experiment.all.count() == 3
+        assert Experiment.objects.count() == 0
+
+        resp = self.auth_client.post(self.url + 'restore/')
+        assert resp.status_code == status.HTTP_200_OK
+
+        assert self.model_class.objects.count() == 1
+        assert self.model_class.all.count() == 1
+        assert Experiment.all.count() == 3
+        assert Experiment.objects.count() == 3
 
 
 @pytest.mark.experiment_groups_mark
@@ -498,7 +565,6 @@ class TestExperimentGroupSelectionViewV1(BaseViewTest):
     model_class = ExperimentGroup
     factory_class = ExperimentGroupFactory
     HAS_AUTH = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -567,12 +633,18 @@ class TestStopExperimentGroupViewV1(BaseViewTest):
     model_class = ExperimentGroup
     factory_class = ExperimentGroupFactory
     HAS_AUTH = True
+    DISABLE_EXECUTOR = False
+    DISABLE_RUNNER = False
 
     def setUp(self):
         super().setUp()
         project = ProjectFactory(user=self.auth_client.user)
         with patch('hpsearch.tasks.grid.hp_grid_search_start.apply_async') as mock_fct:
-            self.object = self.factory_class(project=project)
+            with patch('scheduler.dockerizer_scheduler.create_build_job') as mock_start:
+                build = BuildJobFactory()
+                BuildJobStatus.objects.create(status=JobLifeCycle.SUCCEEDED, job=build)
+                mock_start.return_value = build, True, True
+                self.object = self.factory_class(project=project)
 
         assert mock_fct.call_count == 2
         # Add a running experiment
@@ -630,7 +702,6 @@ class TestExperimentGroupStatusListViewV1(BaseViewTest):
     factory_class = ExperimentGroupStatusFactory
     num_objects = 3
     HAS_AUTH = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -704,7 +775,6 @@ class TestExperimentGroupChartViewListViewV1(BaseViewTest):
     factory_class = ExperimentGroupChartViewFactory
     num_objects = 3
     HAS_AUTH = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -772,7 +842,6 @@ class TestExperimentGroupChartViewDetailViewV1(BaseViewTest):
     model_class = ExperimentGroupChartView
     factory_class = ExperimentGroupChartViewFactory
     HAS_AUTH = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -813,7 +882,6 @@ class TestExperimentGroupMetricListViewV1(BaseViewTest):
     num_objects = 3
     HAS_AUTH = True
     HAS_INTERNAL = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()

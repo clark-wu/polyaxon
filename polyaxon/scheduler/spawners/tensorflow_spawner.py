@@ -1,3 +1,5 @@
+import uuid
+
 import stores
 
 from scheduler.spawners.experiment_spawner import ExperimentSpawner
@@ -100,6 +102,14 @@ class TensorflowSpawner(ExperimentSpawner):
             TaskType.PS: ps_tolerations,
         }
 
+    def create_job_uuids(self):
+        job_uuids = super().create_job_uuids()
+        job_uuids[TaskType.WORKER] = [
+            uuid.uuid4().hex for _ in range(self.get_n_pods(task_type=TaskType.WORKER))]
+        job_uuids[TaskType.PS] = [
+            uuid.uuid4().hex for _ in range(self.get_n_pods(task_type=TaskType.PS))]
+        return job_uuids
+
     def get_resources(self, task_type, task_idx):
         return self.resources.get(task_type, {}).get(task_idx)
 
@@ -134,22 +144,25 @@ class TensorflowSpawner(ExperimentSpawner):
     def get_cluster(self):
         cluster_def, _ = self.spec.cluster_def
 
-        job_name = self.pod_manager.get_job_name(task_type=TaskType.MASTER, task_idx=0)
+        resource_name = self.resource_manager.get_resource_name(task_type=TaskType.MASTER,
+                                                                task_idx=0)
         cluster_config = {
-            TaskType.MASTER: [self._get_pod_address(job_name)]
+            TaskType.MASTER: [self._get_pod_address(resource_name)]
         }
 
         workers = []
         for i in range(cluster_def.get(TaskType.WORKER, 0)):
-            job_name = self.pod_manager.get_job_name(task_type=TaskType.WORKER, task_idx=i)
-            workers.append(self._get_pod_address(job_name))
+            resource_name = self.resource_manager.get_resource_name(task_type=TaskType.WORKER,
+                                                                    task_idx=i)
+            workers.append(self._get_pod_address(resource_name))
 
         cluster_config[TaskType.WORKER] = workers
 
         servers = []
         for i in range(cluster_def.get(TaskType.PS, 0)):
-            job_name = self.pod_manager.get_job_name(task_type=TaskType.PS, task_idx=i)
-            servers.append(self._get_pod_address(job_name))
+            resource_name = self.resource_manager.get_resource_name(task_type=TaskType.PS,
+                                                                    task_idx=i)
+            servers.append(self._get_pod_address(resource_name))
 
         cluster_config[TaskType.PS] = servers
 

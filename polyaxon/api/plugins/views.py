@@ -1,5 +1,6 @@
 from hestia.bool_utils import to_bool
 from rest_framework import status
+from rest_framework.exceptions import ValidationError
 from rest_framework.generics import get_object_or_404
 from rest_framework.response import Response
 
@@ -18,9 +19,11 @@ from api.plugins.serializers import (
 )
 from api.utils.views.protected import ProtectedView
 from constants.experiments import ExperimentLifeCycle
+from constants.jobs import JobLifeCycle
 from db.models.experiment_groups import ExperimentGroup
 from db.models.experiments import Experiment
 from db.models.tensorboards import TensorboardJob
+from db.models.tokens import Token
 from event_manager.events.notebook import (
     NOTEBOOK_STARTED_TRIGGERED,
     NOTEBOOK_STOPPED_TRIGGERED,
@@ -35,7 +38,10 @@ from event_manager.events.tensorboard import (
 from libs.repos import git
 from polyaxon.celery_api import celery_app
 from polyaxon.settings import SchedulerCeleryTasks
-from schemas.specifications import TensorboardSpecification
+from schemas.notebook_backend import NotebookBackend
+from schemas.specifications import NotebookSpecification, TensorboardSpecification
+from scopes.authentication.internal import InternalAuthentication
+from scopes.permissions.internal import IsInitializer
 
 
 class StartTensorboardView(ProjectEndpoint, CreateEndpoint):
@@ -104,7 +110,7 @@ class StartTensorboardView(ProjectEndpoint, CreateEndpoint):
             celery_app.send_task(
                 SchedulerCeleryTasks.TENSORBOARDS_START,
                 kwargs={'tensorboard_job_id': tensorboard.id},
-                countdown=1)
+                countdown=conf.get('GLOBAL_COUNTDOWN'))
         return Response(status=status.HTTP_201_CREATED)
 
 
@@ -137,7 +143,8 @@ class StopTensorboardView(ProjectEndpoint, PostEndpoint):
                     'tensorboard_job_name': tensorboard.unique_name,
                     'tensorboard_job_uuid': tensorboard.uuid.hex,
                     'update_status': True
-                })
+                },
+                countdown=conf.get('GLOBAL_COUNTDOWN'))
             auditor.record(event_type=TENSORBOARD_STOPPED_TRIGGERED,
                            instance=tensorboard,
                            target='project',
@@ -150,8 +157,17 @@ class StartNotebookView(ProjectEndpoint, PostEndpoint):
     """Start a notebook."""
     serializer_class = NotebookJobSerializer
 
+    @staticmethod
+    def _get_default_notebook_config():
+        if not conf.get('NOTEBOOK_DOCKER_IMAGE'):
+            raise ValidationError('Please provide a polyaxonfile, or set a default notebook image.')
+        specification = NotebookSpecification.create_specification(
+            {'image': conf.get('NOTEBOOK_DOCKER_IMAGE')})
+        return {'config': specification}
+
     def _create_notebook(self, project):
-        serializer = self.get_serializer(data=self.request.data)
+        config = self.request.data or self._get_default_notebook_config()
+        serializer = self.get_serializer(data=config)
         serializer.is_valid(raise_exception=True)
         instance = serializer.save(user=self.request.user, project=project)
         auditor.record(event_type=NOTEBOOK_STARTED_TRIGGERED,
@@ -170,23 +186,28 @@ class StartNotebookView(ProjectEndpoint, PostEndpoint):
             celery_app.send_task(
                 SchedulerCeleryTasks.PROJECTS_NOTEBOOK_BUILD,
                 kwargs={'notebook_job_id': notebook.id},
-                countdown=1)
+                countdown=conf.get('GLOBAL_COUNTDOWN'))
         return Response(status=status.HTTP_201_CREATED)
 
 
 class StopNotebookView(ProjectEndpoint, PostEndpoint):
     """Stop a tensorboard."""
+
+    def handle_code(self, request):
+        commit = request.data.get('commit')
+        commit = to_bool(commit) if commit is not None else True
+        if commit and conf.get('MOUNT_CODE_IN_NOTEBOOKS') and self.project.has_repo:
+            # Commit changes
+            git.commit(self.project.repo.path, request.user.email, request.user.username)
+        else:
+            # Reset changes
+            git.undo(self.project.repo.path)
+
     def post(self, request, *args, **kwargs):
         if self.project.has_notebook:
-            commit = request.data.get('commit')
-            commit = to_bool(commit) if commit is not None else True
             try:
-                if commit:
-                    # Commit changes
-                    git.commit(self.project.repo.path, request.user.email, request.user.username)
-                else:
-                    # Reset changes
-                    git.undo(self.project.repo.path)
+                if conf.get('MOUNT_CODE_IN_NOTEBOOKS') and self.project.has_repo:
+                    self.handle_code(request)
             except FileNotFoundError:
                 # Git probably was not found
                 pass
@@ -198,14 +219,15 @@ class StopNotebookView(ProjectEndpoint, PostEndpoint):
                     'notebook_job_name': self.project.notebook.unique_name,
                     'notebook_job_uuid': self.project.notebook.uuid.hex,
                     'update_status': True
-                })
+                },
+                countdown=conf.get('GLOBAL_COUNTDOWN'))
             auditor.record(event_type=NOTEBOOK_STOPPED_TRIGGERED,
                            instance=self.project.notebook,
                            target='project',
                            actor_id=self.request.user.id,
                            actor_name=self.request.user.username,
                            countdown=1)
-        elif self.project.notebook and self.project.notebook.is_running:
+        elif self.project.notebook and self.project.notebook.is_stoppable:
             self.project.notebook.set_status(status=ExperimentLifeCycle.STOPPED,
                                              message='Notebook was stopped')
         return Response(status=status.HTTP_200_OK)
@@ -259,6 +281,12 @@ class PluginJobView(ProjectEndpoint, ProtectedView):
 class NotebookView(PluginJobView):
     @staticmethod
     def get_base_path(instance):
+        if instance.has_notebook:
+            backend = instance.notebook.specification.backend or conf.get('NOTEBOOK_BACKEND')
+        else:
+            backend = conf.get('NOTEBOOK_BACKEND')
+        if backend == NotebookBackend.LAB:
+            return 'lab'
         return 'tree'
 
     @staticmethod
@@ -336,3 +364,19 @@ class ProjectTensorboardListView(ProjectResourceListEndpoint,
                        actor_id=self.request.user.id,
                        actor_name=self.request.user.username)
         return super().filter_queryset(queryset=queryset)
+
+
+class NotebookImpersonateTokenView(ProjectEndpoint, PostEndpoint):
+    """Impersonate a user and return user's token."""
+    authentication_classes = [InternalAuthentication, ]
+    permission_classes = (IsInitializer,)
+    throttle_scope = 'impersonate'
+
+    def post(self, request, *args, **kwargs):
+        project = self.project
+
+        if not project.has_notebook or not JobLifeCycle.is_stoppable(project.notebook.last_status):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+
+        token, _ = Token.objects.get_or_create(user=project.user)
+        return Response({'token': token.key}, status=status.HTTP_200_OK)

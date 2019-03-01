@@ -1,7 +1,10 @@
 from rest_framework import fields, serializers
+from rest_framework.exceptions import ValidationError
 
 from api.utils.serializers.bookmarks import BookmarkedSerializerMixin
 from api.utils.serializers.data_refs import DataRefsSerializerMixin
+from api.utils.serializers.in_cluster import InClusterMixin
+from api.utils.serializers.names import NamesMixin
 from api.utils.serializers.tags import TagsSerializerMixin
 from db.models.jobs import Job, JobStatus
 from libs.spec_validation import validate_job_spec_config
@@ -65,7 +68,11 @@ class BookmarkedJobSerializer(JobSerializer, BookmarkedSerializerMixin):
         fields = JobSerializer.Meta.fields + ('bookmarked',)
 
 
-class JobDetailSerializer(BookmarkedJobSerializer, TagsSerializerMixin, DataRefsSerializerMixin):
+class JobDetailSerializer(BookmarkedJobSerializer,
+                          InClusterMixin,
+                          TagsSerializerMixin,
+                          DataRefsSerializerMixin,
+                          NamesMixin):
     resources = fields.SerializerMethodField()
     merge = fields.BooleanField(write_only=True, required=False)
 
@@ -77,6 +84,7 @@ class JobDetailSerializer(BookmarkedJobSerializer, TagsSerializerMixin, DataRefs
             'description',
             'readme',
             'config',
+            'in_cluster',
             'resources',
             'data_refs',
             'node_scheduled',
@@ -91,16 +99,29 @@ class JobDetailSerializer(BookmarkedJobSerializer, TagsSerializerMixin, DataRefs
                                              tags=instance.tags)
         validated_data = self.validated_data_refs(validated_data=validated_data,
                                                   data_refs=instance.data_refs)
+        validated_data = self.validated_name(validated_data,
+                                             project=instance.project,
+                                             query=Job.all)
 
         return super().update(instance=instance, validated_data=validated_data)
 
 
-class JobCreateSerializer(serializers.ModelSerializer):
+class JobCreateSerializer(serializers.ModelSerializer,
+                          InClusterMixin,
+                          NamesMixin):
     user = fields.SerializerMethodField()
 
     class Meta:
         model = Job
-        fields = ('id', 'user', 'name', 'description', 'readme', 'data_refs', 'config',)
+        fields = (
+            'id',
+            'user',
+            'name',
+            'description',
+            'readme',
+            'in_cluster',
+            'data_refs',
+            'config',)
 
     def get_user(self, obj):
         return obj.user.username
@@ -113,3 +134,12 @@ class JobCreateSerializer(serializers.ModelSerializer):
         """
         validate_job_spec_config(config)
         return config
+
+    def create(self, validated_data):
+        validated_data = self.validated_name(validated_data,
+                                             project=validated_data['project'],
+                                             query=Job.all)
+        try:
+            return super().create(validated_data)
+        except Exception as e:
+            raise ValidationError(e)

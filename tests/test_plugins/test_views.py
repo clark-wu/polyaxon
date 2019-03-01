@@ -6,6 +6,8 @@ import pytest
 
 from rest_framework import status
 
+from django.test import override_settings
+
 from api.plugins.serializers import ProjectTensorboardJobSerializer
 from api.utils.views.protected import ProtectedView
 from constants.jobs import JobLifeCycle
@@ -16,7 +18,6 @@ from db.models.experiments import Experiment
 from db.models.notebooks import NotebookJob, NotebookJobStatus
 from db.models.projects import Project
 from db.models.tensorboards import TensorboardJob, TensorboardJobStatus
-from dockerizer.tasks import build_project_notebook
 from factories.factory_experiment_groups import ExperimentGroupFactory
 from factories.factory_experiments import ExperimentFactory
 from factories.factory_plugins import NotebookJobFactory, TensorboardJobFactory
@@ -35,7 +36,6 @@ class TestProjectTensorboardListViewV1(BaseViewTest):
     factory_class = TensorboardJobFactory
     num_objects = 3
     HAS_AUTH = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -701,11 +701,6 @@ class TestStartNotebookViewV1(BaseViewTest):
                    'projects_notebook_build.apply_async') as build_mock_fct:
             resp = self.auth_client.post(self.url, data)
         assert build_mock_fct.call_count == 1
-
-        # Simulate build
-        with patch('dockerizer.builders.notebooks.build_notebook_job') as mock_fct:
-            build_project_notebook(project_id=self.object.id)
-        assert mock_fct.call_count == 1
         assert resp.status_code == status.HTTP_201_CREATED
         assert self.queryset.count() == 1
 
@@ -809,7 +804,21 @@ class TestStopNotebookViewV1(BaseViewTest):
             self.object.name)
         self.queryset = self.model_class.objects.all()
 
-    def test_stop(self):
+    def test_stop_serverless(self):
+        data = {}
+        assert self.queryset.count() == 1
+        with patch('scheduler.tasks.notebooks.projects_notebook_stop.apply_async') as mock_fct:
+            with patch('libs.repos.git.commit') as mock_git_commit:
+                with patch('libs.repos.git.undo') as mock_git_undo:
+                    resp = self.auth_client.post(self.url, data)
+        assert mock_fct.call_count == 1
+        assert mock_git_commit.call_count == 0
+        assert mock_git_undo.call_count == 0
+        assert resp.status_code == status.HTTP_200_OK
+        assert self.queryset.count() == 1
+
+    @override_settings(MOUNT_CODE_IN_NOTEBOOKS=True)
+    def test_stop_code_mount(self):
         data = {}
         assert self.queryset.count() == 1
         with patch('scheduler.tasks.notebooks.projects_notebook_stop.apply_async') as mock_fct:
@@ -822,7 +831,21 @@ class TestStopNotebookViewV1(BaseViewTest):
         assert resp.status_code == status.HTTP_200_OK
         assert self.queryset.count() == 1
 
-    def test_stop_without_committing(self):
+    def test_stop_without_committing_serverless(self):
+        data = {'commit': False}
+        assert self.queryset.count() == 1
+        with patch('scheduler.tasks.notebooks.projects_notebook_stop.apply_async') as mock_fct:
+            with patch('libs.repos.git.commit') as mock_git_commit:
+                with patch('libs.repos.git.undo') as mock_git_undo:
+                    resp = self.auth_client.post(self.url, data)
+        assert mock_fct.call_count == 1
+        assert mock_git_commit.call_count == 0
+        assert mock_git_undo.call_count == 0
+        assert resp.status_code == status.HTTP_200_OK
+        assert self.queryset.count() == 1
+
+    @override_settings(MOUNT_CODE_IN_NOTEBOOKS=True)
+    def test_stop_without_committing_code_mount(self):
         data = {'commit': False}
         assert self.queryset.count() == 1
         with patch('scheduler.tasks.notebooks.projects_notebook_stop.apply_async') as mock_fct:

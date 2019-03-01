@@ -1,15 +1,16 @@
 import os
 import shutil
 
+from hestia.paths import check_or_create_path, create_path, delete_path
 from hestia.service_interface import InvalidService, Service
 from marshmallow import ValidationError
 from polystores import StoreManager
+from polystores.exceptions import PolyaxonStoresException
 from rhea import RheaError
 
 from libs.paths.experiment_jobs import create_experiment_job_path
 from libs.paths.experiments import create_experiment_path
 from libs.paths.jobs import create_job_path
-from libs.paths.utils import check_archive_path, create_path, delete_path
 from polyaxon.config_manager import config
 from stores.exceptions import VolumeNotFoundError
 from stores.schemas.store import StoreConfig
@@ -22,7 +23,6 @@ class StoresService(Service):
         'get_data_paths',
         'get_data_path',
         'delete_data_path',
-        'get_logs_path',
         'get_outputs_path',
         'delete_outputs_path',
         'get_logs_path',
@@ -39,7 +39,6 @@ class StoresService(Service):
         'get_job_outputs_path',
         'get_job_logs_path',
         'upload_job_logs',
-        'get_notebook_job_outputs_path',
         'get_project_outputs_path',
         'get_project_logs_path',
         'create_experiment_logs_path',
@@ -113,9 +112,16 @@ class StoresService(Service):
 
     @classmethod
     def delete_outputs_path(cls, subpath, persistence):
-        outputs_path = cls.get_outputs_path(persistence=persistence)
+        from stores.validators import validate_persistence_outputs
+
+        persistence_outputs = validate_persistence_outputs(persistence_outputs=persistence)
+        outputs_path = cls.get_outputs_path(persistence=persistence_outputs)
         path = os.path.join(outputs_path, subpath)
-        delete_path(path)
+        store = cls.get_outputs_store(persistence_outputs=persistence_outputs)
+        try:
+            store.delete(path)
+        except (PolyaxonStoresException, VolumeNotFoundError):
+            pass
 
     @staticmethod
     def get_logs_path(persistence='default'):
@@ -128,14 +134,18 @@ class StoresService(Service):
         if persistence_type_condition:
             raise VolumeNotFoundError('Logs volume does not define a mountPath or bucket.')
 
-        return (conf.get('PERSISTENCE_LOGS').get('mountPath') or
-                conf.get('PERSISTENCE_LOGS').get('bucket'))
+        return (conf.get('PERSISTENCE_LOGS').get('bucket') or
+                conf.get('PERSISTENCE_LOGS').get('mountPath'))
 
     @classmethod
     def delete_logs_path(cls, subpath, persistence='default'):
-        outputs_path = cls.get_logs_path(persistence=persistence)
-        path = os.path.join(outputs_path, subpath)
-        delete_path(path)
+        logs_path = cls.get_logs_path(persistence=persistence)
+        path = os.path.join(logs_path, subpath)
+        store = cls.get_logs_store(persistence_logs=persistence)
+        try:
+            store.delete(path)
+        except (PolyaxonStoresException, VolumeNotFoundError):
+            pass
 
     @staticmethod
     def _get_store(store, secret_key):
@@ -267,15 +277,10 @@ class StoresService(Service):
         import conf
 
         if temp:
-            check_archive_path(conf.get('LOGS_ARCHIVE_ROOT'))
+            check_or_create_path(conf.get('LOGS_ARCHIVE_ROOT'))
             return create_experiment_job_path(experiment_job_name, conf.get('LOGS_ARCHIVE_ROOT'))
         persistence_logs = cls.get_logs_path(persistence=persistence)
         return create_experiment_job_path(experiment_job_name, persistence_logs)
-
-    @classmethod
-    def get_notebook_job_outputs_path(cls, persistence, notebook_job):
-        persistence_outputs = cls.get_outputs_path(persistence=persistence)
-        return os.path.join(persistence_outputs, notebook_job.replace('.', '/'))
 
     @classmethod
     def get_project_outputs_path(cls, persistence, project_name):
@@ -305,7 +310,7 @@ class StoresService(Service):
         import conf
 
         if temp:
-            check_archive_path(conf.get('LOGS_ARCHIVE_ROOT'))
+            check_or_create_path(conf.get('LOGS_ARCHIVE_ROOT'))
             return create_experiment_path(experiment_name, conf.get('LOGS_ARCHIVE_ROOT'))
 
         persistence_logs = cls.get_logs_path(persistence=persistence)
@@ -346,7 +351,7 @@ class StoresService(Service):
         import conf
 
         if temp:
-            check_archive_path(conf.get('LOGS_ARCHIVE_ROOT'))
+            check_or_create_path(conf.get('LOGS_ARCHIVE_ROOT'))
             return create_job_path(job_name, conf.get('LOGS_ARCHIVE_ROOT'))
         persistence_logs = cls.get_logs_path(persistence=persistence)
         return create_job_path(job_name, persistence_logs)

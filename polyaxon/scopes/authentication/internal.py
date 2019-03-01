@@ -1,8 +1,12 @@
+from typing import Any, Optional, Tuple
+
 from hestia.auth import AuthenticationTypes
 from hestia.headers import get_header
 from hestia.internal_services import InternalServices
 from rest_framework import exceptions
 from rest_framework.authentication import get_authorization_header
+
+from django.http import HttpRequest
 
 import conf
 
@@ -10,7 +14,9 @@ from scopes.authentication.base import PolyaxonAuthentication
 
 
 class InternalUser(object):
-    def __init__(self):
+    def __init__(self, service):
+        if service not in InternalServices.VALUES:
+            raise ValueError('Received a non recognized internal service.')
         self.username = 'internal_user'
         self.pk = -1
         self.id = -1
@@ -19,27 +25,28 @@ class InternalUser(object):
         self.is_authenticated = True
         self.is_staff = False
         self.is_superuser = False
+        self.service = service
 
     @property
-    def access_token(self):
+    def access_token(self) -> str:
         return conf.get('SECRET_INTERNAL_TOKEN')
 
-    def __eq__(self, other):
+    def __eq__(self, other: Any) -> bool:
         return isinstance(other, InternalUser) and other.username == self.username
 
 
-def is_internal_user(user):
+def is_internal_user(user: Any) -> bool:
     return hasattr(user, 'is_internal')
 
 
-def is_authenticated_internal_user(user):
+def is_authenticated_internal_user(user: Any) -> bool:
     if is_internal_user(user):
         return user.is_internal
 
     return False
 
 
-def get_internal_header(request):
+def get_internal_header(request: HttpRequest) -> str:
     """
     Return request's 'X_POLYAXON_INTERNAL:' header, as a bytestring.
     """
@@ -62,7 +69,7 @@ class InternalAuthentication(PolyaxonAuthentication):
 
     keyword = AuthenticationTypes.INTERNAL_TOKEN
 
-    def authenticate(self, request):
+    def authenticate(self, request: HttpRequest) -> Optional[Tuple['InternalUser', None]]:
         auth = get_authorization_header(request).split()
         internal_service = get_internal_header(request)
 
@@ -92,10 +99,12 @@ class InternalAuthentication(PolyaxonAuthentication):
             msg = 'Invalid token header. Token string should not contain invalid characters.'
             raise exceptions.AuthenticationFailed(msg)
 
-        return self.authenticate_credentials(token)
+        return self.authenticate_credentials(internal_service, token)
 
-    def authenticate_credentials(self, key):  # pylint:disable=arguments-differ
-        internal_user = InternalUser()
+    def authenticate_credentials(self,  # pylint:disable=arguments-differ
+                                 service: str,
+                                 key: str) -> Optional[Tuple['InternalUser', None]]:
+        internal_user = InternalUser(service=service)
         if internal_user.access_token != key:
             raise exceptions.AuthenticationFailed('Invalid token.')
 

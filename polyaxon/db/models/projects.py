@@ -53,7 +53,7 @@ class Project(DiffModel,
         default=True,
         help_text='If project is public or private.')
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.unique_name
 
     class Meta:
@@ -61,36 +61,43 @@ class Project(DiffModel,
         unique_together = (('user', 'name'),)
 
     @property
-    def unique_name(self):
+    def unique_name(self) -> str:
         return PROJECT_UNIQUE_NAME_FORMAT.format(
             user=self.user.username,
             project=self.name)
 
     @property
-    def subpath(self):
+    def subpath(self) -> str:
         return get_project_subpath(project_name=self.unique_name)
 
     @property
-    def has_code(self):
+    def has_code(self) -> bool:
+        return self.has_repo or self.has_external_repo
+
+    @property
+    def has_repo(self):
         return hasattr(self, 'repo')
+
+    @property
+    def has_external_repo(self):
+        return hasattr(self, 'external_repo')
+
+    @property
+    def has_ci(self):
+        return hasattr(self, 'ci')
 
     @cached_property
     def notebook(self):
         return self.notebook_jobs.last()
 
     @cached_property
-    def has_notebook(self):
+    def has_notebook(self) -> bool:
         notebook = self.notebook
-        return notebook and notebook.is_running
+        return notebook and notebook.is_stoppable
 
     @cached_property
     def tensorboard(self):
         return self.tensorboard_jobs.filter(experiment=None, experiment_group=None).last()
-
-    @cached_property
-    def has_tensorboard(self):
-        tensorboard = self.tensorboard
-        return tensorboard and tensorboard.is_running
 
     @property
     def all_experiments(self):
@@ -153,11 +160,11 @@ class Project(DiffModel,
         return TensorboardJob.all.filter(project=self)
 
     @property
-    def has_owner(self):
+    def has_owner(self) -> bool:
         """Quick test to check the instance has an owner."""
         return bool(self.owner_id)
 
-    def archive(self):
+    def archive(self) -> bool:
         if not super().archive():
             return False
         self.experiment_groups.update(deleted=True)
@@ -168,8 +175,8 @@ class Project(DiffModel,
         self.tensorboard_jobs.update(deleted=True)
         return True
 
-    def unarchive(self):
-        if not super().unarchive():
+    def restore(self) -> bool:
+        if not super().restore():
             return False
         self.all_experiment_groups.update(deleted=False)
         self.all_experiments.update(deleted=False)

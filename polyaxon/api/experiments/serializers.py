@@ -3,7 +3,9 @@ from rest_framework.exceptions import ValidationError
 
 from api.utils.serializers.bookmarks import BookmarkedSerializerMixin
 from api.utils.serializers.data_refs import DataRefsSerializerMixin
+from api.utils.serializers.in_cluster import InClusterMixin
 from api.utils.serializers.job_resources import JobResourcesSerializer
+from api.utils.serializers.names import NamesMixin
 from api.utils.serializers.tags import TagsSerializerMixin
 from db.models.experiment_jobs import ExperimentJob, ExperimentJobStatus
 from db.models.experiments import (
@@ -170,8 +172,10 @@ class BookmarkedExperimentSerializer(ExperimentSerializer, BookmarkedSerializerM
 
 
 class ExperimentDetailSerializer(BookmarkedExperimentSerializer,
+                                 InClusterMixin,
                                  TagsSerializerMixin,
-                                 DataRefsSerializerMixin):
+                                 DataRefsSerializerMixin,
+                                 NamesMixin):
     resources = fields.SerializerMethodField()
     num_jobs = fields.SerializerMethodField()
     last_metric = fields.SerializerMethodField()
@@ -184,6 +188,7 @@ class ExperimentDetailSerializer(BookmarkedExperimentSerializer,
             'readme',
             'config',
             'resources',
+            'in_cluster',
             'run_env',
             'data_refs',
             'num_jobs',
@@ -203,6 +208,7 @@ class ExperimentDetailSerializer(BookmarkedExperimentSerializer,
         return obj.jobs__count
 
     def get_last_metric(self, obj):
+        # TODO: Add type handling for experiments
         return {k: round(v, 7) for k, v in obj.last_metric.items()} if obj.last_metric else None
 
     def validated_declarations(self, validated_data, declarations):
@@ -222,11 +228,16 @@ class ExperimentDetailSerializer(BookmarkedExperimentSerializer,
                                                   data_refs=instance.data_refs)
         validated_data = self.validated_declarations(validated_data=validated_data,
                                                      declarations=instance.declarations)
+        validated_data = self.validated_name(validated_data,
+                                             project=instance.project,
+                                             query=Experiment.all)
 
         return super().update(instance=instance, validated_data=validated_data)
 
 
-class ExperimentCreateSerializer(serializers.ModelSerializer):
+class ExperimentCreateSerializer(serializers.ModelSerializer,
+                                 InClusterMixin,
+                                 NamesMixin):
     user = fields.SerializerMethodField()
 
     class Meta:
@@ -241,6 +252,7 @@ class ExperimentCreateSerializer(serializers.ModelSerializer):
             'experiment_group',
             'config',
             'declarations',
+            'in_cluster',
             'run_env',
             'data_refs',
             'tags',
@@ -269,6 +281,15 @@ class ExperimentCreateSerializer(serializers.ModelSerializer):
         raise ValidationError('Current experiment creation could not be performed.\n'
                               'The reason is that the specification sent correspond '
                               'to a `{}`.\n'.format(spec.kind))
+
+    def create(self, validated_data):
+        validated_data = self.validated_name(validated_data,
+                                             project=validated_data['project'],
+                                             query=Experiment.all)
+        try:
+            return super().create(validated_data)
+        except Exception as e:
+            raise ValidationError(e)
 
     def validate(self, attrs):
         if self.initial_data.get('check_specification') and not attrs.get('config'):

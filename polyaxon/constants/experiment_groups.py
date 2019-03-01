@@ -15,6 +15,7 @@ class ExperimentGroupLifeCycle(BaseStatuses):
     RUNNING = StatusOptions.RUNNING
     DONE = StatusOptions.DONE
     FAILED = StatusOptions.FAILED
+    STOPPING = StatusOptions.STOPPING
     STOPPED = StatusOptions.STOPPED
 
     CHOICES = (
@@ -22,16 +23,17 @@ class ExperimentGroupLifeCycle(BaseStatuses):
         (RUNNING, RUNNING),
         (DONE, DONE),
         (FAILED, FAILED),
+        (STOPPING, STOPPING),
         (STOPPED, STOPPED),
     )
 
     VALUES = {
-        CREATED, RUNNING, DONE, FAILED, STOPPED
+        CREATED, RUNNING, DONE, FAILED, STOPPING, STOPPED
     }
 
     PENDING_STATUS = {CREATED, }
-    RUNNING_STATUS = {RUNNING, }
-    DONE_STATUS = {FAILED, STOPPED, DONE}
+    RUNNING_STATUS = {RUNNING, STOPPING, }
+    DONE_STATUS = {FAILED, STOPPED, DONE, }
     FAILED_STATUS = {FAILED, }
 
     TRANSITION_MATRIX = {
@@ -39,5 +41,6 @@ class ExperimentGroupLifeCycle(BaseStatuses):
         RUNNING: {CREATED, STOPPED},
         DONE: {RUNNING, },
         FAILED: {CREATED, RUNNING},
+        STOPPING: set(VALUES) - {STOPPING, STOPPED, },
         STOPPED: set(VALUES) - {STOPPED, },
     }

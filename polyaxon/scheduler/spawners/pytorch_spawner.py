@@ -1,3 +1,5 @@
+import uuid
+
 from scheduler.spawners.experiment_spawner import ExperimentSpawner
 from scheduler.spawners.templates.env_vars import get_env_var
 from schemas.environments import PytorchClusterConfig
@@ -9,16 +11,23 @@ class PytorchSpawner(ExperimentSpawner):
     MASTER_SERVICE = True
     WORKER_SERVICE = False
 
+    def create_job_uuids(self):
+        job_uuids = super().create_job_uuids()
+        job_uuids[TaskType.WORKER] = [
+            uuid.uuid4().hex for _ in range(self.get_n_pods(task_type=TaskType.WORKER))]
+        return job_uuids
+
     def get_env_vars(self, task_type, task_idx):
         if task_type == TaskType.MASTER:
             rank = 0
             master_addr = 'localhost'
         else:
             rank = task_idx + 1
-            master_addr = self.pod_manager.get_job_name(task_type=TaskType.MASTER, task_idx=0)
+            master_addr = self.resource_manager.get_resource_name(task_type=TaskType.MASTER,
+                                                                  task_idx=0)
         env_vars = [
             get_env_var(name='MASTER_ADDR', value=master_addr),
-            get_env_var(name='MASTER_PORT', value=self.pod_manager.ports[0]),
+            get_env_var(name='MASTER_PORT', value=self.ports[0]),
             get_env_var(name='WORLD_SIZE', value=self.get_n_pods(TaskType.WORKER) + 1),
             get_env_var(name='RANK', value=rank)
         ]
@@ -106,15 +115,17 @@ class PytorchSpawner(ExperimentSpawner):
     def get_cluster(self):
         cluster_def, _ = self.spec.cluster_def
 
-        job_name = self.pod_manager.get_job_name(task_type=TaskType.MASTER, task_idx=0)
+        resource_name = self.resource_manager.get_resource_name(task_type=TaskType.MASTER,
+                                                                task_idx=0)
         cluster_config = {
-            TaskType.MASTER: [self._get_pod_address(job_name)]
+            TaskType.MASTER: [self._get_pod_address(resource_name)]
         }
 
         workers = []
         for i in range(cluster_def.get(TaskType.WORKER, 0)):
-            job_name = self.pod_manager.get_job_name(task_type=TaskType.WORKER, task_idx=i)
-            workers.append(self._get_pod_address(job_name))
+            resource_name = self.resource_manager.get_resource_name(task_type=TaskType.WORKER,
+                                                                    task_idx=i)
+            workers.append(self._get_pod_address(resource_name))
 
         cluster_config[TaskType.WORKER] = workers
 

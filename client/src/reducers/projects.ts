@@ -12,6 +12,22 @@ export const projectsReducer: Reducer<ProjectStateSchema> =
   (state: ProjectStateSchema = ProjectsEmptyState, action: ProjectAction) => {
     let newState = {...state};
 
+    const setProjectRelated = (project: ProjectModel) => {
+      if (project.experiments == null) {
+        project.experiments = [];
+      }
+      if (project.groups == null) {
+        project.groups = [];
+      }
+      if (project.jobs == null) {
+        project.jobs = [];
+      }
+      if (project.builds == null) {
+        project.builds = [];
+      }
+      return project;
+    };
+
     const processProject = (project: ProjectModel) => {
       const uniqueName = project.unique_name;
       if (!_.includes(newState.lastFetched.names, uniqueName)) {
@@ -20,22 +36,14 @@ export const projectsReducer: Reducer<ProjectStateSchema> =
       if (!_.includes(newState.uniqueNames, uniqueName)) {
         newState.uniqueNames.push(uniqueName);
       }
+      if (_.isNil(project.deleted)) {
+        project.deleted = false;
+      }
       const normalizedProjects = normalize(project, ProjectSchema).entities.projects;
       newState.byUniqueNames[uniqueName] = {
         ...newState.byUniqueNames[uniqueName], ...normalizedProjects[uniqueName]
       };
-      if (newState.byUniqueNames[uniqueName].experiments == null) {
-        newState.byUniqueNames[uniqueName].experiments = [];
-      }
-      if (newState.byUniqueNames[uniqueName].groups == null) {
-        newState.byUniqueNames[uniqueName].groups = [];
-      }
-      if (newState.byUniqueNames[uniqueName].jobs == null) {
-        newState.byUniqueNames[uniqueName].jobs = [];
-      }
-      if (newState.byUniqueNames[uniqueName].builds == null) {
-        newState.byUniqueNames[uniqueName].builds = [];
-      }
+      setProjectRelated(newState.byUniqueNames[uniqueName]);
       return newState;
     };
 
@@ -54,6 +62,24 @@ export const projectsReducer: Reducer<ProjectStateSchema> =
           lastFetched: {
             ...state.lastFetched,
             names: state.lastFetched.names.filter((name) => name !== action.projectName)
+          },
+        };
+      case actionTypes.ARCHIVE_PROJECT:
+        return {
+          ...state,
+          byUniqueNames: {
+            ...state.byUniqueNames,
+            [action.projectName]: {
+              ...state.byUniqueNames[action.projectName], deleted: true}
+          },
+        };
+      case actionTypes.RESTORE_PROJECT:
+        return {
+          ...state,
+          byUniqueNames: {
+            ...state.byUniqueNames,
+            [action.projectName]: {
+              ...state.byUniqueNames[action.projectName], deleted: false}
           },
         };
       case actionTypes.BOOKMARK_PROJECT:
@@ -83,10 +109,19 @@ export const projectsReducer: Reducer<ProjectStateSchema> =
               ...state.byUniqueNames[action.projectName], has_tensorboard: false}
           },
         };
+      case actionTypes.STOP_PROJECT_NOTEBOOK:
+        return {
+          ...state,
+          byUniqueNames: {
+            ...state.byUniqueNames,
+            [action.projectName]: {
+              ...state.byUniqueNames[action.projectName], has_notebook: false}
+          },
+        };
       case actionTypes.UPDATE_PROJECT:
         return {
           ...state,
-          byUniqueNames: {...state.byUniqueNames, [action.project.unique_name]: action.project}
+          byUniqueNames: {...state.byUniqueNames, [action.project.unique_name]: setProjectRelated(action.project)}
         };
       case actionTypes.REQUEST_PROJECTS:
         newState.lastFetched = new LastFetchedNames();
@@ -109,7 +144,7 @@ export const UserProjectsReducer: Reducer<UserStateSchema> =
   (state: UserStateSchema = UserEmptyState, action: ProjectAction) => {
     let newState = {...state};
 
-    const processProject = function(project: ProjectModel, count?: number) {
+    const processProject = (project: ProjectModel, count?: number) => {
       const username = project.user;
       const uniqueName = project.unique_name;
       if (!_.includes(newState.userNames, username)) {

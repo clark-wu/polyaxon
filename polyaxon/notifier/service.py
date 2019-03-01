@@ -17,7 +17,7 @@ class NotifierService(EventService):
         self.notification = None
 
     @staticmethod
-    def get_recipients(event):
+    def get_recipients(event: 'Event'):
         if event.get_event_subject() == event_subjects.PROJECT:
             return get_project_recipients(event.instance)
         return get_instance_and_project_recipients(event.instance)
@@ -76,7 +76,7 @@ class NotifierService(EventService):
             except Exception as e:
                 action.logger.warning('Action execution failed %s', e, exc_info=True)
 
-    def setup(self):
+    def setup(self) -> None:
         super().setup()
         # Load default event types and actions
         import notifier.actions  # noqa

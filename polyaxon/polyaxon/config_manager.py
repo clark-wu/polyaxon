@@ -54,7 +54,16 @@ class ConfigManager(rhea.Rhea):
         self._log_level = self.get_string('POLYAXON_LOG_LEVEL',
                                           is_local=True,
                                           is_optional=True,
-                                          default='INFO')
+                                          default='WARNING').upper()
+        self._enable_scheduler = self.get_boolean('POLYAXON_ENABLE_SCHEDULER',
+                                                  is_optional=True,
+                                                  default=True)
+        self._enable_notifier = self.get_boolean('POLYAXON_ENABLE_NOTIFIER',
+                                                 is_optional=True,
+                                                 default=True)
+        self._enable_activitylogs = self.get_boolean('POLYAXON_ENABLE_ACTIVITY_LOGS',
+                                                     is_optional=True,
+                                                     default=True)
         self._chart_version = self.get_string('POLYAXON_CHART_VERSION',
                                               is_optional=True,
                                               default='0.0.0')
@@ -178,13 +187,22 @@ class ConfigManager(rhea.Rhea):
         return False
 
     @property
+    def log_handlers(self):
+        return ['console', 'sentry']
+
+    @property
     def log_level(self):
-        return self._log_level if config.is_staging_env else 'WARNING'
+        if config.is_staging_env:
+            return self._log_level
+        elif self._log_level == 'DEBUG':
+            return 'INFO'
+        return self._log_level
 
     def setup_auditor_services(self):
         if not self.is_testing_env:
             import activitylogs
             import auditor
+            import executor
             import notifier
             import tracker
 
@@ -192,16 +210,27 @@ class ConfigManager(rhea.Rhea):
             auditor.setup()
             tracker.validate()
             tracker.setup()
-            activitylogs.validate()
-            activitylogs.setup()
-            notifier.validate()
-            notifier.setup()
+            if self._enable_activitylogs:
+                activitylogs.validate()
+                activitylogs.setup()
+            if self._enable_notifier:
+                notifier.validate()
+                notifier.setup()
+            if self._enable_scheduler:
+                executor.validate()
+                executor.setup()
 
     def setup_conf_service(self):
         import conf
 
         conf.validate()
         conf.setup()
+
+    def setup_ci_service(self):
+        import ci
+
+        ci.validate()
+        ci.setup()
 
     def setup_publisher_service(self):
         import publisher
@@ -253,6 +282,16 @@ class ConfigManager(rhea.Rhea):
             is_local=True,
             is_optional=True)
         return self._decode(value) if value else None
+
+    @cached_property
+    def ignore_exceptions(self):
+        return self.get_string(
+            '_POLYAXON_IGNORE_EXCEPTIONS',
+            is_list=True,
+            is_secret=True,
+            is_local=True,
+            is_optional=True,
+            default=[])
 
     @cached_property
     def platform_dsn(self):

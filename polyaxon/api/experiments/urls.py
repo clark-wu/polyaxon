@@ -23,6 +23,12 @@ experiments_urlpatterns = [
     re_path(r'^{}/{}/experiments/{}/?$'.format(
         OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, EXPERIMENT_ID_PATTERN),
         views.ExperimentDetailView.as_view()),
+    re_path(r'^{}/{}/experiments/{}/archive/?$'.format(
+        OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, EXPERIMENT_ID_PATTERN),
+        views.ExperimentArchiveView.as_view()),
+    re_path(r'^{}/{}/experiments/{}/restore/?$'.format(
+        OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, EXPERIMENT_ID_PATTERN),
+        views.ExperimentRestoreView.as_view()),
     re_path(r'^{}/{}/experiments/{}/restart/?$'.format(
         OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, EXPERIMENT_ID_PATTERN),
         views.ExperimentRestartView.as_view()),
@@ -76,7 +82,13 @@ experiments_urlpatterns = [
         bookmark_views.ExperimentBookmarkDeleteView.as_view()),
     re_path(r'^{}/{}/experiments/{}/token/?$'.format(
         OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, EXPERIMENT_ID_PATTERN),
-        views.ExperimentScopeTokenView.as_view()),
+        views.ExperimentEphemeralTokenView.as_view()),  # TODO: deprecate until v0.5
+    re_path(r'^{}/{}/experiments/{}/ephemeraltoken/?$'.format(
+        OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, EXPERIMENT_ID_PATTERN),
+        views.ExperimentEphemeralTokenView.as_view()),
+    re_path(r'^{}/{}/experiments/{}/imporsonatetoken/?$'.format(
+        OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, EXPERIMENT_ID_PATTERN),
+        views.ExperimentImpersonateTokenView.as_view()),
     re_path(r'^{}/{}/experiments/{}/_heartbeat/?$'.format(
         OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, EXPERIMENT_ID_PATTERN),
         views.ExperimentHeartBeatView.as_view()),
@@ -89,6 +101,9 @@ jobs_urlpatterns = [
     re_path(r'^{}/{}/experiments/{}/jobs/{}/statuses/?$'.format(
         OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, EXPERIMENT_ID_PATTERN, JOB_ID_PATTERN),
         views.ExperimentJobStatusListView.as_view()),
+    re_path(r'^{}/{}/experiments/{}/jobs/{}/logs/?$'.format(
+        OWNER_NAME_PATTERN, PROJECT_NAME_PATTERN, EXPERIMENT_ID_PATTERN, JOB_ID_PATTERN),
+        views.ExperimentJobLogsView.as_view()),
     re_path(r'^{}/{}/experiments/{}/jobs/{}/statuses/{}/?$'.format(
         OWNER_NAME_PATTERN,
         PROJECT_NAME_PATTERN,

@@ -8,20 +8,15 @@ import conf
 
 from constants.jobs import JobLifeCycle
 from db.models.build_jobs import BuildJob
-from docker_images.image_info import get_tagged_image
+from docker_images.image_info import get_image_name
 from event_manager.events.build_job import BUILD_JOB_STARTED, BUILD_JOB_STARTED_TRIGGERED
 from scheduler.spawners.dockerizer_spawner import DockerizerSpawner
+from scheduler.spawners.kaniko_spawner import KanikoSpawner
 from scheduler.spawners.utils import get_job_definition
+from schemas.build_backends import BuildBackend
 from stores.exceptions import VolumeNotFoundError
 
 _logger = logging.getLogger('polyaxon.scheduler.dockerizer')
-
-
-def check_image(build_job):
-    from docker import APIClient
-
-    docker = APIClient(version='auto')
-    return docker.images(get_tagged_image(build_job))
 
 
 def create_build_job(user, project, config, code_reference, configmap_refs=None, secret_refs=None):
@@ -42,11 +37,6 @@ def create_build_job(user, project, config, code_reference, configmap_refs=None,
         secret_refs=secret_refs)
 
     if build_job.succeeded and not rebuild:
-        # Check if image was built in less than an 6 hours
-        return build_job, True, False
-
-    if check_image(build_job=build_job):
-        # Check if image exists already
         return build_job, True, False
 
     if build_job.is_done:
@@ -72,18 +62,51 @@ def create_build_job(user, project, config, code_reference, configmap_refs=None,
     return build_job, False, build_status
 
 
+def get_default_spawner():
+    if conf.get('BUILD_BACKEND') == BuildBackend.NATIVE:
+        return DockerizerSpawner
+    elif conf.get('BUILD_BACKEND') == BuildBackend.KANIKO:
+        return KanikoSpawner
+    return DockerizerSpawner
+
+
+def get_spawner_class(builder):
+    if builder == BuildBackend.NATIVE:
+        return DockerizerSpawner
+    elif builder == BuildBackend.KANIKO:
+        return KanikoSpawner
+    return get_default_spawner()
+
+
 def start_dockerizer(build_job):
     # Update job status to show that its started
     build_job.set_status(JobLifeCycle.SCHEDULED)
+    spawner_class = get_spawner_class(build_job.backend)
 
-    spawner = DockerizerSpawner(
+    local_build = build_job.backend in {BuildBackend.NATIVE, None}
+
+    spawner = spawner_class(
         project_name=build_job.project.unique_name,
         project_uuid=build_job.project.uuid.hex,
         job_name=build_job.unique_name,
         job_uuid=build_job.uuid.hex,
+        commit=build_job.commit,
+        from_image=build_job.build_image,
+        dockerfile_path=build_job.build_dockerfile,
+        context_path=build_job.build_context,
+        image_tag=build_job.uuid.hex,
+        image_name=get_image_name(
+            build_job,
+            local=local_build),
+        build_steps=build_job.build_steps,
+        env_vars=build_job.build_env_vars,
+        nocache=build_job.specification.build.nocache,
+        in_cluster_registry=conf.get('REGISTRY_IN_CLUSTER'),
+        spec=build_job.specification,
         k8s_config=conf.get('K8S_CONFIG'),
         namespace=conf.get('K8S_NAMESPACE'),
-        in_cluster=True)
+        in_cluster=True,
+        use_sidecar=True)
 
     error = {}
     try:
@@ -138,6 +161,7 @@ def stop_dockerizer(project_name, project_uuid, build_job_name, build_job_uuid):
         job_uuid=build_job_uuid,
         k8s_config=conf.get('K8S_CONFIG'),
         namespace=conf.get('K8S_NAMESPACE'),
+        spec=None,
         in_cluster=True)
 
     return spawner.stop_dockerizer()

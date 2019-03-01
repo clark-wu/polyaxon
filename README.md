@@ -1,6 +1,6 @@
 [![Build Status](https://travis-ci.org/polyaxon/polyaxon.svg?branch=master)](https://travis-ci.org/polyaxon/polyaxon)
-[![Docs](https://img.shields.io/badge/docs-0.3.7-brightgreen.svg?style=flat)](https://docs.polyaxon.com)
-![Release](https://img.shields.io/badge/release-0.3.7-brightgreen.svg?longCache=true)
+[![Docs](https://img.shields.io/badge/docs-0.4.1-brightgreen.svg?style=flat)](https://docs.polyaxon.com)
+![Release](https://img.shields.io/badge/release-0.4.1-brightgreen.svg?longCache=true)
 [![Codacy Badge](https://api.codacy.com/project/badge/Grade/90c05b6b112548c1a88b950beceacb69)](https://www.codacy.com/app/polyaxon/polyaxon?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=polyaxon/polyaxon&amp;utm_campaign=Badge_Grade)
 [![Slack](https://img.shields.io/badge/chat-on%20slack-aadada.svg?logo=slack&longCache=true)](https://join.slack.com/t/polyaxon/shared_invite/enQtMzQ0ODc2MDg1ODc0LWY2ZTdkMTNmZjBlZmRmNjQxYmYwMTBiMDZiMWJhODI2ZTk0MDU4Mjg5YzA5M2NhYzc5ZjhiMjczMDllYmQ2MDg)
 
@@ -125,10 +125,9 @@ and update your polyaxonfile with an environment section.
 
 By default polyaxon creates a master job, so you only need to provide the workers  and/or parameter servers.
 
- * [Tensorflow distributed example](https://github.com/polyaxon/polyaxon-examples/blob/master/tensorflow/cifare10/polyaxonfile_distributed.yml)
- * [MXNet distributed example](https://github.com/polyaxon/polyaxon-examples/blob/master/mxnet/cifar10/polyaxonfile_distributed.yml)
- * [Pytorch distributed example](https://github.com/polyaxon/polyaxon-examples/blob/master/pytorch/mnist/polyaxonfile_distributed.yml)
-
+ * [Tensorflow distributed example](https://github.com/polyaxon/polyaxon-examples/blob/master/in_cluster/tensorflow/cifar10/polyaxonfile_distributed.yml)
+ * [MXNet distributed example](https://github.com/polyaxon/polyaxon-examples/blob/master/in_cluster/mxnet/cifar10/polyaxonfile_distributed.yml)
+ * [Pytorch distributed example](https://github.com/polyaxon/polyaxon-examples/blob/master/in_cluster/pytorch/mnist/polyaxonfile_distributed.yml)
 # Hyperparameters tuning
 
 Polyaxon has a concept for suggesting hyperparameters and managing their results very similar to Google Vizier called experiment groups.

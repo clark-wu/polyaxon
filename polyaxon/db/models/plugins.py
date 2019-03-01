@@ -1,3 +1,5 @@
+from typing import List, Optional
+
 from django.conf import settings
 from django.db import models
 from django.utils.functional import cached_property
@@ -6,6 +8,7 @@ from db.models.abstract_jobs import AbstractJob
 from db.models.utils import (
     DeletedModel,
     DescribableModel,
+    InCluster,
     NameableModel,
     NodeSchedulingModel,
     OutputsModel,
@@ -16,6 +19,7 @@ from db.models.utils import (
 
 
 class PluginJobBase(AbstractJob,
+                    InCluster,
                     OutputsModel,
                     PersistenceModel,
                     SubPathModel,
@@ -47,9 +51,9 @@ class PluginJobBase(AbstractJob,
         abstract = True
 
     @cached_property
-    def secret_refs(self):
+    def secret_refs(self) -> Optional[List[str]]:
         return self.specification.secret_refs
 
     @cached_property
-    def configmap_refs(self):
+    def configmap_refs(self) -> Optional[List[str]]:
         return self.specification.configmap_refs

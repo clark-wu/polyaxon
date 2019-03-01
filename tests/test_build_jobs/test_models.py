@@ -17,8 +17,6 @@ from tests.utils import BaseTest
 
 @pytest.mark.build_jobs_mark
 class TestBuildJobModels(BaseTest):
-    DISABLE_RUNNER = True
-
     def setUp(self):
         super().setUp()
         self.project = ProjectFactory()
@@ -33,6 +31,19 @@ class TestBuildJobModels(BaseTest):
         job = BuildJobFactory()
         assert BuildJobStatus.objects.filter(job=job).count() == 1
         assert job.last_status == JobLifeCycle.CREATED
+
+    def test_status_update_results_in_new_updated_at_datetime(self):
+        job = BuildJobFactory()
+        updated_at = job.updated_at
+        # Create new status
+        BuildJobStatus.objects.create(job=job, status=JobLifeCycle.BUILDING)
+        job.refresh_from_db()
+        assert updated_at < job.updated_at
+        updated_at = job.updated_at
+        # Create status Using set_status
+        job.set_status(JobLifeCycle.RUNNING)
+        job.refresh_from_db()
+        assert updated_at < job.updated_at
 
     def test_create_build_job_from_experiment(self):
         assert BuildJobStatus.objects.count() == 0
@@ -273,7 +284,7 @@ class TestBuildJobModels(BaseTest):
         assert BuildJob.objects.count() == 0
         assert BuildJob.all.count() == 1
 
-        build_job.unarchive()
+        build_job.restore()
         assert build_job.deleted is False
         assert BuildJob.objects.count() == 1
         assert BuildJob.all.count() == 1

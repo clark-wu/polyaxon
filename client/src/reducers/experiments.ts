@@ -21,6 +21,12 @@ export const experimentsReducer: Reducer<ExperimentStateSchema> =
   (state: ExperimentStateSchema = ExperimentsEmptyState, action: ExperimentAction) => {
     let newState = {...state};
 
+    const setExperimentRelated = (experiment: ExperimentModel) => {
+      if (experiment.jobs == null) {
+        experiment.jobs = [];
+      }
+      return experiment;
+    };
     const processExperiment = (experiment: ExperimentModel) => {
       const uniqueName = getExperimentIndexName(experiment.unique_name);
       if (!_.includes(newState.lastFetched.names, uniqueName)) {
@@ -29,14 +35,15 @@ export const experimentsReducer: Reducer<ExperimentStateSchema> =
       if (!_.includes(newState.uniqueNames, uniqueName)) {
         newState.uniqueNames.push(uniqueName);
       }
+      if (_.isNil(experiment.deleted)) {
+        experiment.deleted = false;
+      }
       const normalizedExperiments = normalize(experiment, ExperimentSchema).entities.experiments;
       newState.byUniqueNames[uniqueName] = {
         ...newState.byUniqueNames[uniqueName],
         ...normalizedExperiments[experiment.unique_name]
       };
-      if (newState.byUniqueNames[uniqueName].jobs == null) {
-        newState.byUniqueNames[uniqueName].jobs = [];
-      }
+      setExperimentRelated(newState.byUniqueNames[uniqueName]);
       return newState;
     };
 
@@ -71,6 +78,24 @@ export const experimentsReducer: Reducer<ExperimentStateSchema> =
             ...state.lastFetched,
             names: state.lastFetched.names.filter(
               (name) => experimentNames.indexOf(name) === -1)},
+        };
+      case actionTypes.ARCHIVE_EXPERIMENT:
+        return {
+          ...state,
+          byUniqueNames: {
+            ...state.byUniqueNames,
+            [getExperimentIndexName(action.experimentName)]: {
+              ...state.byUniqueNames[getExperimentIndexName(action.experimentName)], deleted: true}
+          },
+        };
+      case actionTypes.RESTORE_EXPERIMENT:
+        return {
+          ...state,
+          byUniqueNames: {
+            ...state.byUniqueNames,
+            [getExperimentIndexName(action.experimentName)]: {
+              ...state.byUniqueNames[getExperimentIndexName(action.experimentName)], deleted: false}
+          },
         };
       case actionTypes.STOP_EXPERIMENT:
         return {
@@ -117,7 +142,7 @@ export const experimentsReducer: Reducer<ExperimentStateSchema> =
           ...state,
           byUniqueNames: {
             ...state.byUniqueNames, [
-              getExperimentIndexName(action.experiment.unique_name)]: action.experiment
+              getExperimentIndexName(action.experiment.unique_name)]: setExperimentRelated(action.experiment)
           }
         };
       case actionTypes.STOP_EXPERIMENT_TENSORBOARD:

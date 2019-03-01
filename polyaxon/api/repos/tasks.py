@@ -3,13 +3,14 @@ import os
 import shutil
 import tarfile
 
+from hestia.paths import delete_path
+
 from django.contrib.auth import get_user_model
 
 import auditor
 
 from db.models.repos import Repo
 from event_manager.events.repo import REPO_NEW_COMMIT
-from libs.paths.utils import delete_path
 from libs.repos import git
 from polyaxon.celery_api import celery_app
 from polyaxon.settings import ReposCeleryTasks

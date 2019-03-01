@@ -11,6 +11,8 @@ JOB_STOPPED_TRIGGERED = '{}.{}.{}'.format(event_subjects.JOB,
                                           event_subjects.TRIGGER)
 JOB_CREATED = '{}.{}'.format(event_subjects.JOB, event_actions.CREATED)
 JOB_VIEWED = '{}.{}'.format(event_subjects.JOB, event_actions.VIEWED)
+JOB_ARCHIVED = '{}.{}'.format(event_subjects.JOB, event_actions.ARCHIVED)
+JOB_RESTORED = '{}.{}'.format(event_subjects.JOB, event_actions.RESTORED)
 JOB_BOOKMARKED = '{}.{}'.format(event_subjects.JOB, event_actions.BOOKMARKED)
 JOB_UNBOOKMARKED = '{}.{}'.format(event_subjects.JOB, event_actions.UNBOOKMARKED)
 JOB_UPDATED = '{}.{}'.format(event_subjects.JOB, event_actions.UPDATED)
@@ -22,6 +24,9 @@ JOB_DONE = '{}.{}'.format(event_subjects.JOB, event_actions.DONE)
 JOB_DELETED = '{}.{}'.format(event_subjects.JOB, event_actions.DELETED)
 JOB_DELETED_TRIGGERED = '{}.{}.{}'.format(event_subjects.JOB,
                                           event_actions.DELETED,
+                                          event_subjects.TRIGGER)
+JOB_CLEANED_TRIGGERED = '{}.{}.{}'.format(event_subjects.JOB,
+                                          event_actions.CLEANED,
                                           event_subjects.TRIGGER)
 JOB_LOGS_VIEWED = '{}.{}'.format(event_subjects.JOB, event_actions.LOGS_VIEWED)
 JOB_OUTPUTS_DOWNLOADED = '{}.{}'.format(event_subjects.JOB, event_actions.OUTPUTS_DOWNLOADED)
@@ -44,6 +49,7 @@ class JobCreatedEvent(Event):
         Attribute('project.id'),
         Attribute('project.user.id'),
         Attribute('created_at', is_datetime=True),
+        Attribute('has_specification', attr_type=bool),
         Attribute('has_description', attr_type=bool),
     )
 
@@ -109,6 +115,32 @@ class JobSoppedTriggeredEvent(Event):
 
 class JobViewedEvent(Event):
     event_type = JOB_VIEWED
+    actor = True
+    attributes = (
+        Attribute('id'),
+        Attribute('user.id'),
+        Attribute('project.id'),
+        Attribute('project.user.id'),
+        Attribute('last_status'),
+        Attribute('has_description', attr_type=bool),
+    )
+
+
+class JobArchivedEvent(Event):
+    event_type = JOB_ARCHIVED
+    actor = True
+    attributes = (
+        Attribute('id'),
+        Attribute('user.id'),
+        Attribute('project.id'),
+        Attribute('project.user.id'),
+        Attribute('last_status'),
+        Attribute('has_description', attr_type=bool),
+    )
+
+
+class JobRestoredEvent(Event):
+    event_type = JOB_RESTORED
     actor = True
     attributes = (
         Attribute('id'),
@@ -206,6 +238,13 @@ class JobDeletedTriggeredEvent(Event):
         Attribute('project.user.id'),
         Attribute('has_description', attr_type=bool),
         Attribute('last_status'),
+    )
+
+
+class JobCleanedTriggeredEvent(Event):
+    event_type = JOB_CLEANED_TRIGGERED
+    attributes = (
+        Attribute('id'),
     )
 
 

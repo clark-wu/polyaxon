@@ -1,8 +1,5 @@
 import logging
-import mimetypes
 import os
-
-from wsgiref.util import FileWrapper
 
 from hestia.bool_utils import to_bool
 from polystores.exceptions import PolyaxonStoresException
@@ -12,9 +9,8 @@ from rest_framework.generics import get_object_or_404
 from rest_framework.response import Response
 from rest_framework.settings import api_settings
 
-from django.http import StreamingHttpResponse
-
 import auditor
+import conf
 import stores
 
 from api.endpoint.base import (
@@ -36,17 +32,21 @@ from api.jobs.serializers import (
     JobSerializer,
     JobStatusSerializer
 )
+from api.utils.files import stream_file
 from api.utils.views.bookmarks_mixin import BookmarkedListMixinView
 from api.utils.views.protected import ProtectedView
+from constants.jobs import JobLifeCycle
 from db.models.jobs import Job, JobStatus
+from db.models.tokens import Token
 from db.redis.heartbeat import RedisHeartBeat
 from db.redis.tll import RedisTTL
 from event_manager.events.job import (
-    JOB_CREATED,
+    JOB_ARCHIVED,
     JOB_DELETED_TRIGGERED,
     JOB_LOGS_VIEWED,
     JOB_OUTPUTS_DOWNLOADED,
     JOB_RESTARTED_TRIGGERED,
+    JOB_RESTORED,
     JOB_STATUSES_VIEWED,
     JOB_STOPPED_TRIGGERED,
     JOB_UPDATED,
@@ -59,7 +59,7 @@ from logs_handlers.log_queries.job import process_logs
 from polyaxon.celery_api import celery_app
 from polyaxon.settings import SchedulerCeleryTasks
 from scopes.authentication.internal import InternalAuthentication
-from scopes.permissions.internal import IsAuthenticatedOrInternal
+from scopes.permissions.internal import IsAuthenticatedOrInternal, IsInitializer
 from scopes.permissions.projects import get_permissible_project
 from stores.exceptions import VolumeNotFoundError  # noqa
 
@@ -101,7 +101,6 @@ class ProjectJobListView(BookmarkedListMixinView,
                 raise ValidationError('ttl must be an integer.')
         instance = serializer.save(user=self.request.user,
                                    project=self.project)
-        auditor.record(event_type=JOB_CREATED, instance=instance)
         if ttl:
             RedisTTL.set_for_job(job_id=instance.id, value=ttl)
 
@@ -128,7 +127,40 @@ class JobDetailView(JobEndpoint, RetrieveEndpoint, UpdateEndpoint, DestroyEndpoi
         instance.archive()
         celery_app.send_task(
             SchedulerCeleryTasks.JOBS_SCHEDULE_DELETION,
-            kwargs={'job_id': instance.id})
+            kwargs={'job_id': instance.id, 'immediate': True},
+            countdown=conf.get('GLOBAL_COUNTDOWN'))
+
+
+class JobArchiveView(JobEndpoint, CreateEndpoint):
+    """Restore an Build."""
+    serializer_class = JobSerializer
+
+    def post(self, request, *args, **kwargs):
+        obj = self.get_object()
+        auditor.record(event_type=JOB_ARCHIVED,
+                       instance=obj,
+                       actor_id=request.user.id,
+                       actor_name=request.user.username)
+        celery_app.send_task(
+            SchedulerCeleryTasks.JOBS_SCHEDULE_DELETION,
+            kwargs={'job_id': obj.id, 'immediate': False},
+            countdown=conf.get('GLOBAL_COUNTDOWN'))
+        return Response(status=status.HTTP_200_OK)
+
+
+class JobRestoreView(JobEndpoint, CreateEndpoint):
+    """Restore an Build."""
+    queryset = Job.all
+    serializer_class = JobSerializer
+
+    def post(self, request, *args, **kwargs):
+        obj = self.get_object()
+        auditor.record(event_type=JOB_RESTORED,
+                       instance=obj,
+                       actor_id=request.user.id,
+                       actor_name=request.user.username)
+        obj.restore()
+        return Response(status=status.HTTP_200_OK)
 
 
 class JobCloneView(JobEndpoint, CreateEndpoint):
@@ -211,6 +243,9 @@ class JobStatusListView(JobResourceListEndpoint, ListEndpoint, CreateEndpoint):
     """
     queryset = JobStatus.objects.order_by('created_at')
     serializer_class = JobStatusSerializer
+    authentication_classes = api_settings.DEFAULT_AUTHENTICATION_CLASSES + [
+        InternalAuthentication,
+    ]
 
     def perform_create(self, serializer):
         serializer.save(job=self.job)
@@ -250,19 +285,7 @@ class JobLogsView(JobEndpoint, RetrieveEndpoint):
             process_logs(job=self.job, temp=True)
             log_path = stores.get_job_logs_path(job_name=job_name, temp=True)
 
-        filename = os.path.basename(log_path)
-        chunk_size = 8192
-        try:
-            wrapped_file = FileWrapper(open(log_path, 'rb'), chunk_size)
-            response = StreamingHttpResponse(wrapped_file,
-                                             content_type=mimetypes.guess_type(log_path)[0])
-            response['Content-Length'] = os.path.getsize(log_path)
-            response['Content-Disposition'] = "attachment; filename={}".format(filename)
-            return response
-        except FileNotFoundError:
-            _logger.warning('Log file not found: log_path=%s', log_path)
-            return Response(status=status.HTTP_404_NOT_FOUND,
-                            data='Log file not found: log_path={}'.format(log_path))
+        return stream_file(file_path=log_path, logger=_logger)
 
 
 class JobStopView(JobEndpoint, PostEndpoint):
@@ -282,7 +305,8 @@ class JobStopView(JobEndpoint, PostEndpoint):
                 'job_uuid': self.job.uuid.hex,
                 'update_status': True,
                 'collect_logs': True,
-            })
+            },
+            countdown=conf.get('GLOBAL_COUNTDOWN'))
         return Response(status=status.HTTP_200_OK)
 
 
@@ -352,21 +376,9 @@ class JobOutputsFilesView(JobEndpoint, RetrieveEndpoint):
                                                  filepath=filepath)
         if not download_filepath:
             return Response(status=status.HTTP_404_NOT_FOUND,
-                            data='Log file not found: log_path={}'.format(download_filepath))
+                            data='Outputs file not found: log_path={}'.format(download_filepath))
 
-        filename = os.path.basename(download_filepath)
-        chunk_size = 8192
-        try:
-            wrapped_file = FileWrapper(open(download_filepath, 'rb'), chunk_size)
-            response = StreamingHttpResponse(
-                wrapped_file, content_type=mimetypes.guess_type(download_filepath)[0])
-            response['Content-Length'] = os.path.getsize(download_filepath)
-            response['Content-Disposition'] = "attachment; filename={}".format(filename)
-            return response
-        except FileNotFoundError:
-            _logger.warning('Log file not found: log_path=%s', download_filepath)
-            return Response(status=status.HTTP_404_NOT_FOUND,
-                            data='Log file not found: log_path={}'.format(download_filepath))
+        return stream_file(file_path=download_filepath, logger=_logger)
 
 
 class JobHeartBeatView(JobEndpoint, PostEndpoint):
@@ -382,3 +394,20 @@ class JobHeartBeatView(JobEndpoint, PostEndpoint):
     def post(self, request, *args, **kwargs):
         RedisHeartBeat.job_ping(job_id=self.job.id)
         return Response(status=status.HTTP_200_OK)
+
+
+class JobImpersonateTokenView(JobEndpoint, PostEndpoint):
+    """Impersonate a user and return user's token."""
+    authentication_classes = [InternalAuthentication, ]
+    permission_classes = (IsInitializer,)
+    throttle_scope = 'impersonate'
+    lookup_url_kwarg = 'job_id'
+
+    def post(self, request, *args, **kwargs):
+        job = self.get_object()
+
+        if not JobLifeCycle.is_stoppable(job.last_status):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+
+        token, _ = Token.objects.get_or_create(user=job.user)
+        return Response({'token': token.key}, status=status.HTTP_200_OK)

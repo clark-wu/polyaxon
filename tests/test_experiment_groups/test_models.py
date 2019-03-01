@@ -13,11 +13,14 @@ import conf
 
 from constants.experiment_groups import ExperimentGroupLifeCycle
 from constants.experiments import ExperimentLifeCycle
+from constants.jobs import JobLifeCycle
 from constants.urls import API_V1
 from db.managers.deleted import ArchivedManager, LiveManager
+from db.models.build_jobs import BuildJobStatus
 from db.models.experiment_groups import ExperimentGroup, ExperimentGroupIteration, GroupTypes
 from db.models.experiments import Experiment, ExperimentMetric
 from db.redis.group_check import GroupChecks
+from factories.factory_build_jobs import BuildJobFactory
 from factories.factory_experiment_groups import ExperimentGroupFactory, ExperimentGroupStatusFactory
 from factories.factory_experiments import (
     ExperimentFactory,
@@ -52,6 +55,8 @@ from tests.utils import BaseTest, BaseViewTest
 
 @pytest.mark.experiment_groups_mark
 class TestExperimentGroupModel(BaseTest):
+    DISABLE_RUNNER = False
+    DISABLE_EXECUTOR = False
     # @patch('scheduler.tasks.experiment_groups.experiments_group_create.apply_async')
     # @patch('scheduler.tasks.storage.stores_schedule_logs_deletion.apply_async')
     # @patch('scheduler.tasks.storage.stores_schedule_outputs_deletion.apply_async')
@@ -63,6 +68,20 @@ class TestExperimentGroupModel(BaseTest):
     #
     #     assert delete_outputs_path.call_count == 1
     #     assert delete_logs_path.call_count == 1
+
+    def test_status_update_results_in_new_updated_at_datetime(self):
+        experiment_group = ExperimentGroupFactory()
+        updated_at = experiment_group.updated_at
+        # Create new status
+        ExperimentGroupStatusFactory(experiment_group=experiment_group,
+                                     status=ExperimentGroupLifeCycle.RUNNING)
+        experiment_group.refresh_from_db()
+        assert updated_at < experiment_group.updated_at
+        updated_at = experiment_group.updated_at
+        # Create status Using set_status
+        experiment_group.set_status(ExperimentLifeCycle.FAILED)
+        experiment_group.refresh_from_db()
+        assert updated_at < experiment_group.updated_at
 
     @patch('scheduler.tasks.experiment_groups.experiments_group_create.apply_async')
     @patch('scheduler.tasks.storage.stores_schedule_logs_deletion.apply_async')
@@ -399,7 +418,12 @@ class TestExperimentGroupModel(BaseTest):
         assert Experiment.objects.filter(experiment_group=experiment_group).count() == 0
         assert mock_fct.call_count == 1
 
-    def test_spec_creation_triggers_experiments_creations_and_scheduling(self):
+    @patch('scheduler.dockerizer_scheduler.create_build_job')
+    def test_spec_creation_triggers_experiments_creations_and_scheduling(self,
+                                                                         create_build_job):
+        build = BuildJobFactory()
+        BuildJobStatus.objects.create(status=JobLifeCycle.SUCCEEDED, job=build)
+        create_build_job.return_value = build, True, True
         with patch('hpsearch.tasks.grid.hp_grid_search_start.apply_async') as mock_fct:
             experiment_group = ExperimentGroupFactory()
 
@@ -425,7 +449,12 @@ class TestExperimentGroupModel(BaseTest):
         assert experiment_group.running_experiments.count() == 0
         assert experiment_group.succeeded_experiments.count() == 1
 
-    def test_experiment_group_deletion_triggers_stopping_for_running_experiment(self):
+    @patch('scheduler.dockerizer_scheduler.create_build_job')
+    def test_experiment_group_deletion_triggers_stopping_for_running_experiment(self,
+                                                                                create_build_job):
+        build = BuildJobFactory()
+        BuildJobStatus.objects.create(status=JobLifeCycle.SUCCEEDED, job=build)
+        create_build_job.return_value = build, True, True
         with patch('hpsearch.tasks.grid.hp_grid_search_start.apply_async') as mock_fct:
             experiment_group = ExperimentGroupFactory()
 
@@ -446,7 +475,12 @@ class TestExperimentGroupModel(BaseTest):
 
         assert Experiment.objects.filter(experiment_group=experiment_group).count() == 0
 
-    def test_experiment_create_a_max_of_experiments(self):
+    @patch('scheduler.dockerizer_scheduler.create_build_job')
+    def test_experiment_create_a_max_of_experiments(self, create_build_job):
+        build = BuildJobFactory()
+        BuildJobStatus.objects.create(status=JobLifeCycle.SUCCEEDED, job=build)
+        create_build_job.return_value = build, True, True
+
         assert ExperimentGroupIteration.objects.count() == 0
         with patch('hpsearch.tasks.random.hp_random_search_start.apply_async') as mock_fct:
             experiment_group = ExperimentGroupFactory(
@@ -458,7 +492,12 @@ class TestExperimentGroupModel(BaseTest):
         assert ExperimentGroupIteration.objects.count() == 1
         assert ExperimentGroupIteration.objects.last().data['num_suggestions'] == 2
 
-    def test_experiment_group_should_stop_early(self):
+    @patch('scheduler.dockerizer_scheduler.create_build_job')
+    def test_experiment_group_should_stop_early(self, create_build_job):
+        build = BuildJobFactory()
+        BuildJobStatus.objects.create(status=JobLifeCycle.SUCCEEDED, job=build)
+        create_build_job.return_value = build, True, True
+
         with patch('hpsearch.tasks.random.hp_random_search_start.apply_async') as mock_fct:
             experiment_group = ExperimentGroupFactory(
                 content=experiment_group_spec_content_early_stopping)
@@ -499,7 +538,12 @@ class TestExperimentGroupModel(BaseTest):
 
         assert experiment_group.should_stop_early() is False
 
-    def test_stop_pending_experiments(self):
+    @patch('scheduler.dockerizer_scheduler.create_build_job')
+    def test_stop_pending_experiments(self, create_build_job):
+        build = BuildJobFactory()
+        BuildJobStatus.objects.create(status=JobLifeCycle.SUCCEEDED, job=build)
+        create_build_job.return_value = build, True, True
+
         with patch('hpsearch.tasks.random.hp_random_search_start.apply_async') as mock_fct:
             experiment_group = ExperimentGroupFactory(
                 content=experiment_group_spec_content_early_stopping)
@@ -515,7 +559,12 @@ class TestExperimentGroupModel(BaseTest):
         assert experiment_group.pending_experiments.count() == 0
         assert experiment_group.running_experiments.count() == 1
 
-    def test_stop_all_experiments(self):
+    @patch('scheduler.dockerizer_scheduler.create_build_job')
+    def test_stop_all_experiments(self, create_build_job):
+        build = BuildJobFactory()
+        BuildJobStatus.objects.create(status=JobLifeCycle.SUCCEEDED, job=build)
+        create_build_job.return_value = build, True, True
+
         with patch('hpsearch.tasks.random.hp_random_search_start.apply_async') as mock_fct:
             experiment_group = ExperimentGroupFactory(
                 content=experiment_group_spec_content_early_stopping)
@@ -543,7 +592,12 @@ class TestExperimentGroupModel(BaseTest):
         assert logs_collector_mock_fct.call_count == 1
         assert experiment_group.stopped_experiments.count() == 3
 
-    def test_stopping_group_stops_iteration(self):
+    @patch('scheduler.dockerizer_scheduler.create_build_job')
+    def test_stopping_group_stops_iteration(self, create_build_job):
+        build = BuildJobFactory()
+        BuildJobStatus.objects.create(status=JobLifeCycle.SUCCEEDED, job=build)
+        create_build_job.return_value = build, True, True
+
         # Fake reschedule
         with patch('hpsearch.tasks.hyperband.hp_hyperband_start.apply_async') as mock_fct:
             experiment_group = ExperimentGroupFactory(
@@ -570,7 +624,12 @@ class TestExperimentGroupModel(BaseTest):
 
         assert mock_fct1.call_count == 0
 
-    def test_hyperband_rescheduling(self):
+    @patch('scheduler.dockerizer_scheduler.create_build_job')
+    def test_hyperband_rescheduling(self, create_build_job):
+        build = BuildJobFactory()
+        BuildJobStatus.objects.create(status=JobLifeCycle.SUCCEEDED, job=build)
+        create_build_job.return_value = build, True, True
+
         with patch('hpsearch.tasks.hyperband.hp_hyperband_start.apply_async') as mock_fct:
             ExperimentGroupFactory(content=experiment_group_spec_content_hyperband)
 
@@ -646,7 +705,12 @@ class TestExperimentGroupModel(BaseTest):
         assert mock_fct2.call_count == 1
         assert mock_fct3.call_count == 1
 
-    def test_bo_rescheduling(self):
+    @patch('scheduler.dockerizer_scheduler.create_build_job')
+    def test_bo_rescheduling(self, create_build_job):
+        build = BuildJobFactory()
+        BuildJobStatus.objects.create(status=JobLifeCycle.SUCCEEDED, job=build)
+        create_build_job.return_value = build, True, True
+
         with patch('hpsearch.tasks.bo.hp_bo_start.apply_async') as mock_fct:
             ExperimentGroupFactory(content=experiment_group_spec_content_bo)
 
@@ -698,7 +762,12 @@ class TestExperimentGroupModel(BaseTest):
         assert isinstance(ExperimentGroup.objects, LiveManager)
         assert isinstance(ExperimentGroup.archived, ArchivedManager)
 
-    def test_archive(self):
+    @patch('scheduler.dockerizer_scheduler.create_build_job')
+    def test_archive(self, create_build_job):
+        build = BuildJobFactory()
+        BuildJobStatus.objects.create(status=JobLifeCycle.SUCCEEDED, job=build)
+        create_build_job.return_value = build, True, True
+
         with patch('hpsearch.tasks.grid.hp_grid_search_start.apply_async') as mock_fct:
             experiment_group = ExperimentGroupFactory()
         assert mock_fct.call_count == 2
@@ -717,7 +786,7 @@ class TestExperimentGroupModel(BaseTest):
         assert experiment_group.experiments.count() == 0
         assert experiment_group.all_experiments.count() == 2
 
-        experiment_group.unarchive()
+        experiment_group.restore()
         assert experiment_group.deleted is False
         assert ExperimentGroup.objects.count() == 1
         assert ExperimentGroup.all.count() == 1
@@ -729,6 +798,9 @@ class TestExperimentGroupModel(BaseTest):
 
 @pytest.mark.experiment_groups_mark
 class TestExperimentGroupCommit(BaseViewTest):
+    DISABLE_RUNNER = False
+    DISABLE_EXECUTOR = False
+
     def setUp(self):
         super().setUp()
         self.project = ProjectFactory(user=self.auth_client.user)
@@ -744,7 +816,11 @@ class TestExperimentGroupCommit(BaseViewTest):
 
     def create_experiment_group(self):
         with patch('hpsearch.tasks.grid.hp_grid_search_start.apply_async') as _:  # noqa
-            return ExperimentGroupFactory(project=self.project)
+            with patch('scheduler.dockerizer_scheduler.create_build_job') as mock_start:
+                build = BuildJobFactory()
+                BuildJobStatus.objects.create(status=JobLifeCycle.SUCCEEDED, job=build)
+                mock_start.return_value = build, True, True
+                return ExperimentGroupFactory(project=self.project)
 
     def test_experiment_group_is_saved_with_commit(self):
         uploaded_file = self.get_upload_file()
@@ -788,7 +864,11 @@ class TestExperimentGroupCommit(BaseViewTest):
         assert last_commit is not None
 
         with patch('hpsearch.tasks.grid.hp_grid_search_start.apply_async') as mock_fct:
-            experiment_group = ExperimentGroupFactory(project=self.project)
+            with patch('scheduler.dockerizer_scheduler.create_build_job') as mock_start:
+                build = BuildJobFactory()
+                BuildJobStatus.objects.create(status=JobLifeCycle.SUCCEEDED, job=build)
+                mock_start.return_value = build, True, True
+                experiment_group = ExperimentGroupFactory(project=self.project)
 
         assert mock_fct.call_count == 2
         assert experiment_group.experiments.count() == 2

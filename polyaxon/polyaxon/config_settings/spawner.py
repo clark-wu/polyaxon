@@ -80,6 +80,7 @@ TOLERATIONS_TENSORBOARDS = config.get_string(
 TOLERATIONS_CORE = config.get_string(
     'POLYAXON_TOLERATIONS_CORE', is_optional=True)
 
+# Container names
 CONTAINER_NAME_EXPERIMENT_JOB = config.get_string('POLYAXON_CONTAINER_NAME_EXPERIMENT_JOB',
                                                   is_optional=True,
                                                   default='polyaxon-experiment-job')
@@ -101,19 +102,51 @@ CONTAINER_NAME_DOCKERIZER_JOB = config.get_string('POLYAXON_CONTAINER_NAME_DOCKE
 JOB_DOCKER_NAME = config.get_string('POLYAXON_JOB_DOCKER_NAME',
                                     is_optional=True,
                                     default='polyaxon/polyaxon-lib')
+
+# Sidecar
 JOB_SIDECAR_DOCKER_IMAGE = config.get_string('POLYAXON_JOB_SIDECAR_DOCKER_IMAGE')
 JOB_SIDECAR_DOCKER_IMAGE_PULL_POLICY = config.get_string(
     'POLYAXON_JOB_SIDECAR_DOCKER_IMAGE_PULL_POLICY',
-    is_optional=True,)
-JOB_INIT_DOCKER_IMAGE = config.get_string('POLYAXON_JOB_INIT_DOCKER_IMAGE',
-                                          is_optional=True,
-                                          default='ubuntu:16.04')
+    is_optional=True)
+
+# Init job
+JOB_INIT_DOCKER_IMAGE = config.get_string('POLYAXON_JOB_INIT_DOCKER_IMAGE')
+JOB_INIT_DOCKER_IMAGE_PULL_POLICY = config.get_string(
+    'POLYAXON_JOB_INIT_DOCKER_IMAGE_PULL_POLICY',
+    is_optional=True)
+
+# Dockerizer
+BUILD_BACKEND = config.get_string('POLYAXON_BUILD_BACKEND',
+                                  is_optional=True,
+                                  default='native')
+JOB_KANIKO_IMAGE = config.get_string('POLYAXON_JOB_KANIKO_IMAGE')
+JOB_KANIKO_IMAGE_PULL_POLICY = config.get_string(
+    'POLYAXON_JOB_KANIKO_IMAGE_PULL_POLICY',
+    is_optional=True)
 JOB_DOCKERIZER_IMAGE = config.get_string('POLYAXON_JOB_DOCKERIZER_IMAGE')
 JOB_DOCKERIZER_IMAGE_PULL_POLICY = config.get_string(
     'POLYAXON_JOB_DOCKERIZER_IMAGE_PULL_POLICY',
     is_optional=True,)
+
+# Tensorboard
 TENSORBOARD_DOCKER_IMAGE = config.get_string('POLYAXON_TENSORBOARD_DOCKER_IMAGE',
                                              is_optional=True,
-                                             default='tensorflow/tensorflow:1.4.1-py3')
+                                             default='tensorflow/tensorflow:1.11.0-py3')
+
+# Notebook config
+MOUNT_CODE_IN_NOTEBOOKS = config.get_boolean('POLYAXON_MOUNT_CODE_IN_NOTEBOOKS',
+                                             is_optional=True,
+                                             default=False)
+NOTEBOOK_DOCKER_IMAGE = config.get_string('POLYAXON_NOTEBOOK_DOCKER_IMAGE',
+                                          is_optional=True)
+NOTEBOOK_BACKEND = config.get_string('POLYAXON_NOTEBOOK_BACKEND',
+                                     is_optional=True,
+                                     default='notebook')
+# Sidecar config
 JOB_SIDECAR_LOG_SLEEP_INTERVAL = config.get_int('POLYAXON_JOB_SIDECAR_LOG_SLEEP_INTERVAL',
                                                 is_optional=True)
+
+# TPU
+K8S_TPU_TF_VERSION = config.get_string('POLYAXON_K8S_TPU_TF_VERSION',
+                                       is_optional=True,
+                                       default='1.12')

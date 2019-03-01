@@ -39,7 +39,7 @@ class TestProjectJobListViewV1(BaseViewTest):
     factory_class = JobFactory
     num_objects = 3
     HAS_AUTH = True
-    DISABLE_RUNNER = True
+    DISABLE_EXECUTOR = False
 
     def setUp(self):
         super().setUp()
@@ -401,15 +401,24 @@ class TestJobDetailViewV1(BaseViewTest):
         assert new_object.is_clone is True
         assert new_object.original_job == new_job
 
-    def test_delete_archives_and_schedules_stop(self):
+        # Update name
+        data = {'name': 'new_name'}
+        assert new_object.name is None
+        resp = self.auth_client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.name == data['name']
+
+    def test_delete_archives_deletes_immediately_and_schedules_stop(self):
         self.object.set_status(JobLifeCycle.SCHEDULED)
         assert self.model_class.objects.count() == 1
         with patch('scheduler.tasks.jobs.jobs_stop.apply_async') as spawner_mock_stop:
             resp = self.auth_client.delete(self.url)
-        assert spawner_mock_stop.call_count == 1
+        assert spawner_mock_stop.called
         assert resp.status_code == status.HTTP_204_NO_CONTENT
+        # Deleted
         assert self.model_class.objects.count() == 0
-        assert self.model_class.all.count() == 1
+        assert self.model_class.all.count() == 0
 
     def test_delete_archives_and_schedules_deletion(self):
         self.object.set_status(JobLifeCycle.SCHEDULED)
@@ -418,7 +427,37 @@ class TestJobDetailViewV1(BaseViewTest):
             resp = self.auth_client.delete(self.url)
         assert spawner_mock_stop.call_count == 1
         assert resp.status_code == status.HTTP_204_NO_CONTENT
+        # Patched
         assert self.model_class.objects.count() == 0
+        assert self.model_class.all.count() == 1
+
+    def test_archive_schedule_deletion(self):
+        self.object.set_status(JobLifeCycle.SCHEDULED)
+        assert self.model_class.objects.count() == 1
+        with patch('scheduler.tasks.jobs.jobs_schedule_deletion.apply_async') as spawner_mock_stop:
+            resp = self.auth_client.post(self.url + 'archive/')
+        assert resp.status_code == status.HTTP_200_OK
+        assert spawner_mock_stop.call_count == 1
+        assert self.model_class.objects.count() == 1
+        assert self.model_class.all.count() == 1
+
+    def test_archive_schedule_archives_and_schedules_stop(self):
+        self.object.set_status(JobLifeCycle.SCHEDULED)
+        assert self.model_class.objects.count() == 1
+        with patch('scheduler.tasks.jobs.jobs_stop.apply_async') as spawner_mock_stop:
+            resp = self.auth_client.post(self.url + 'archive/')
+        assert resp.status_code == status.HTTP_200_OK
+        assert spawner_mock_stop.call_count == 1
+        assert self.model_class.objects.count() == 0
+        assert self.model_class.all.count() == 1
+
+    def test_restore(self):
+        self.object.archive()
+        assert self.model_class.objects.count() == 0
+        assert self.model_class.all.count() == 1
+        resp = self.auth_client.post(self.url + 'restore/')
+        assert resp.status_code == status.HTTP_200_OK
+        assert self.model_class.objects.count() == 1
         assert self.model_class.all.count() == 1
 
 
@@ -429,6 +468,8 @@ class TestJobStatusListViewV1(BaseViewTest):
     factory_class = JobStatusFactory
     num_objects = 3
     HAS_AUTH = True
+    HAS_INTERNAL = True
+    INTERNAL_SERVICE = InternalServices.SIDECAR
 
     def setUp(self):
         super().setUp()
@@ -447,6 +488,8 @@ class TestJobStatusListViewV1(BaseViewTest):
 
     def test_get(self):
         resp = self.auth_client.get(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        resp = self.internal_client.get(self.url)
         assert resp.status_code == status.HTTP_200_OK
 
         assert resp.data['next'] is None
@@ -494,6 +537,24 @@ class TestJobStatusListViewV1(BaseViewTest):
         assert last_object.job == self.job
         assert last_object.status == data['status']
 
+        # Create with message and traceback
+        data = {'status': JobLifeCycle.FAILED,
+                'message': 'message1',
+                'traceback': 'traceback1'}
+        resp = self.auth_client.post(self.url, data)
+        assert resp.status_code == status.HTTP_201_CREATED
+        assert self.model_class.objects.count() == self.num_objects + 3
+        last_object = self.model_class.objects.last()
+        assert last_object.job == self.job
+        assert last_object.status == data['status']
+        assert last_object.message == data['message']
+        assert last_object.traceback == data['traceback']
+
+        data = {}
+        resp = self.internal_client.post(self.url, data)
+        assert resp.status_code == status.HTTP_201_CREATED
+        assert self.model_class.objects.count() == self.num_objects + 4
+
 
 @pytest.mark.jobs_mark
 class TestJobStatusDetailViewV1(BaseViewTest):
@@ -539,7 +600,7 @@ class TestRestartJobViewV1(BaseViewTest):
     model_class = Job
     factory_class = JobFactory
     HAS_AUTH = True
-    DISABLE_RUNNER = True
+    DISABLE_EXECUTOR = False
 
     def setUp(self):
         super().setUp()
@@ -638,7 +699,6 @@ class TestStopJobViewV1(BaseViewTest):
 class TestJobLogsViewV1(BaseViewTest):
     num_log_lines = 10
     HAS_AUTH = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -710,7 +770,6 @@ class DownloadJobOutputsViewTest(BaseViewTest):
     factory_class = JobFactory
     HAS_AUTH = True
     HAS_INTERNAL = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -748,7 +807,6 @@ class DownloadJobOutputsViewTest(BaseViewTest):
 @pytest.mark.jobs_mark
 class TestJobHeartBeatViewV1(BaseViewTest):
     HAS_AUTH = True
-    DISABLE_RUNNER = True
     HAS_INTERNAL = True
     INTERNAL_SERVICE = InternalServices.SIDECAR
 
@@ -779,7 +837,6 @@ class TestJobHeartBeatViewV1(BaseViewTest):
 class TestJobOutputsTreeViewV1(BaseFilesViewTest):
     num_log_lines = 10
     HAS_AUTH = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -820,7 +877,6 @@ class TestJobOutputsTreeViewV1(BaseFilesViewTest):
 class TestJobOutputsFilesViewV1(BaseFilesViewTest):
     num_log_lines = 10
     HAS_AUTH = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()

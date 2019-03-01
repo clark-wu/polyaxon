@@ -3,6 +3,7 @@ import logging
 from polystores.exceptions import PolyaxonStoresException
 from rest_framework.exceptions import ValidationError
 
+import conf
 import publisher
 import stores
 
@@ -61,7 +62,8 @@ def experiments_build(experiment_id):
     if not (experiment.specification.build and experiment.specification.run):
         celery_app.send_task(
             SchedulerCeleryTasks.EXPERIMENTS_START,
-            kwargs={'experiment_id': experiment_id})
+            kwargs={'experiment_id': experiment_id},
+            countdown=conf.get('GLOBAL_COUNTDOWN'))
         return
 
     last_status = experiment.last_status
@@ -85,7 +87,8 @@ def experiments_build(experiment_id):
         # The image already exists, so we can start the experiment right away
         celery_app.send_task(
             SchedulerCeleryTasks.EXPERIMENTS_START,
-            kwargs={'experiment_id': experiment_id})
+            kwargs={'experiment_id': experiment_id},
+            countdown=conf.get('GLOBAL_COUNTDOWN'))
         return
 
     if not build_status:
@@ -154,7 +157,7 @@ def experiments_start(experiment_id):
 
 
 @celery_app.task(name=SchedulerCeleryTasks.EXPERIMENTS_SCHEDULE_DELETION, ignore_result=True)
-def experiments_schedule_deletion(experiment_id):
+def experiments_schedule_deletion(experiment_id, immediate=False):
     experiment = get_valid_experiment(experiment_id=experiment_id, include_deleted=True)
     if not experiment:
         _logger.info('Something went wrong, '
@@ -163,24 +166,31 @@ def experiments_schedule_deletion(experiment_id):
 
     experiment.archive()
 
-    if not experiment.is_running:
-        return
+    if experiment.is_stoppable:
+        project = experiment.project
+        celery_app.send_task(
+            SchedulerCeleryTasks.EXPERIMENTS_STOP,
+            kwargs={
+                'project_name': project.unique_name,
+                'project_uuid': project.uuid.hex,
+                'experiment_name': experiment.unique_name,
+                'experiment_uuid': experiment.uuid.hex,
+                'experiment_group_name': None,
+                'experiment_group_uuid': None,
+                'specification': experiment.config,
+                'update_status': True,
+                'collect_logs': False,
+                'message': 'Experiment is scheduled for deletion.'
+            },
+            countdown=conf.get('GLOBAL_COUNTDOWN'))
 
-    project = experiment.project
-    celery_app.send_task(
-        SchedulerCeleryTasks.EXPERIMENTS_STOP,
-        kwargs={
-            'project_name': project.unique_name,
-            'project_uuid': project.uuid.hex,
-            'experiment_name': experiment.unique_name,
-            'experiment_uuid': experiment.uuid.hex,
-            'experiment_group_name': None,
-            'experiment_group_uuid': None,
-            'specification': experiment.config,
-            'update_status': True,
-            'collect_logs': False,
-            'message': 'Experiment is scheduled for deletion.'
-        })
+    if immediate:
+        celery_app.send_task(
+            SchedulerCeleryTasks.DELETE_ARCHIVED_EXPERIMENT,
+            kwargs={
+                'experiment_id': experiment_id,
+            },
+            countdown=conf.get('GLOBAL_COUNTDOWN'))
 
 
 @celery_app.task(name=SchedulerCeleryTasks.EXPERIMENTS_STOP,

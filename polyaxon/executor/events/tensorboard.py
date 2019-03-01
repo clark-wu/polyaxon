@@ -1,0 +1,10 @@
+import executor
+
+from event_manager.events import tensorboard
+
+executor.subscribe(tensorboard.TensorboardStartedEvent)
+executor.subscribe(tensorboard.TensorboardSoppedEvent)
+executor.subscribe(tensorboard.TensorboardCleanedTriggeredEvent)
+executor.subscribe(tensorboard.TensorboardNewStatusEvent)
+executor.subscribe(tensorboard.TensorboardFailedEvent)
+executor.subscribe(tensorboard.TensorboardSucceededEvent)

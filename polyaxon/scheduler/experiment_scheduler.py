@@ -9,9 +9,7 @@ import conf
 from constants.experiments import ExperimentLifeCycle
 from db.models.experiment_jobs import ExperimentJob
 from db.models.job_resources import JobResources
-from db.redis.ephemeral_tokens import RedisEphemeralTokens
 from docker_images.image_info import get_image_info
-from polyaxon.config_manager import config
 from scheduler.spawners.experiment_spawner import ExperimentSpawner
 from scheduler.spawners.horovod_spawner import HorovodSpawner
 from scheduler.spawners.mxnet_spawner import MXNetSpawner
@@ -33,16 +31,13 @@ _logger = logging.getLogger('polyaxon.scheduler.experiment')
 
 def create_job(job_uuid,
                experiment,
-               definition,
                role=None,
                sequence=None,
                resources=None,
                node_selector=None,
                affinity=None,
                tolerations=None):
-    job = ExperimentJob(uuid=job_uuid,
-                        experiment=experiment,
-                        definition=definition)
+    job = ExperimentJob(uuid=uuid.UUID(job_uuid), experiment=experiment, definition={})
     if role:
         job.role = role
 
@@ -85,6 +80,12 @@ def create_job(job_uuid,
     job.save()
 
 
+def set_job_definition(job_uuid, definition):
+    job = ExperimentJob.objects.get(uuid=job_uuid)
+    job.definition = definition
+    job.save(update_fields=['definition'])
+
+
 def get_spawner_class(framework):
     if framework == Frameworks.TENSORFLOW:
         return TensorflowSpawner
@@ -98,15 +99,10 @@ def get_spawner_class(framework):
     return ExperimentSpawner
 
 
-def handle_tensorflow_experiment(experiment, spawner, response):
-    # Get the number of jobs this experiment started
-    master = response[TaskType.MASTER]
-    job_uuid = master['pod']['metadata']['labels']['job_uuid']
-    job_uuid = uuid.UUID(job_uuid)
-
-    create_job(job_uuid=job_uuid,
+def create_tensorflow_experiment_jobs(experiment, spawner):
+    master_job_uuid = spawner.job_uuids[TaskType.MASTER][0]
+    create_job(job_uuid=master_job_uuid,
                experiment=experiment,
-               definition=get_job_definition(master),
                resources=spawner.spec.master_resources,
                node_selector=spawner.spec.master_node_selector,
                affinity=spawner.spec.master_affinity,
@@ -135,12 +131,9 @@ def handle_tensorflow_experiment(experiment, spawner, response):
         is_distributed=is_distributed
     )
 
-    for i, worker in enumerate(response[TaskType.WORKER]):
-        job_uuid = worker['pod']['metadata']['labels']['job_uuid']
-        job_uuid = uuid.UUID(job_uuid)
-        create_job(job_uuid=job_uuid,
+    for i, worker_job_uuid in enumerate(spawner.job_uuids[TaskType.WORKER]):
+        create_job(job_uuid=worker_job_uuid,
                    experiment=experiment,
-                   definition=get_job_definition(worker),
                    role=TaskType.WORKER,
                    sequence=i,
                    resources=worker_resources.get(i),
@@ -169,12 +162,9 @@ def handle_tensorflow_experiment(experiment, spawner, response):
         is_distributed=is_distributed
     )
 
-    for i, ps in enumerate(response[TaskType.PS]):
-        job_uuid = ps['pod']['metadata']['labels']['job_uuid']
-        job_uuid = uuid.UUID(job_uuid)
-        create_job(job_uuid=job_uuid,
+    for i, ps_job_uuid in enumerate(spawner.job_uuids[TaskType.PS]):
+        create_job(job_uuid=ps_job_uuid,
                    experiment=experiment,
-                   definition=get_job_definition(ps),
                    role=TaskType.PS,
                    sequence=i,
                    resources=ps_resources.get(i),
@@ -183,15 +173,28 @@ def handle_tensorflow_experiment(experiment, spawner, response):
                    tolerations=ps_tolerations.get(i))
 
 
-def handle_horovod_experiment(experiment, spawner, response):
-    # Get the number of jobs this experiment started
+def handle_tensorflow_experiment(response):
     master = response[TaskType.MASTER]
     job_uuid = master['pod']['metadata']['labels']['job_uuid']
     job_uuid = uuid.UUID(job_uuid)
 
-    create_job(job_uuid=job_uuid,
+    set_job_definition(job_uuid=job_uuid, definition=get_job_definition(master))
+
+    for worker in response[TaskType.WORKER]:
+        job_uuid = worker['pod']['metadata']['labels']['job_uuid']
+        job_uuid = uuid.UUID(job_uuid)
+        set_job_definition(job_uuid=job_uuid, definition=get_job_definition(worker))
+
+    for ps in response[TaskType.PS]:
+        job_uuid = ps['pod']['metadata']['labels']['job_uuid']
+        job_uuid = uuid.UUID(job_uuid)
+        set_job_definition(job_uuid=job_uuid, definition=get_job_definition(ps))
+
+
+def create_horovod_experiment_jobs(experiment, spawner):
+    master_job_uuid = spawner.job_uuids[TaskType.MASTER][0]
+    create_job(job_uuid=master_job_uuid,
                experiment=experiment,
-               definition=get_job_definition(master),
                resources=spawner.spec.master_resources,
                node_selector=spawner.spec.master_node_selector,
                affinity=spawner.spec.master_affinity,
@@ -219,12 +222,9 @@ def handle_horovod_experiment(experiment, spawner, response):
         is_distributed=is_distributed
     )
 
-    for i, worker in enumerate(response[TaskType.WORKER]):
-        job_uuid = worker['pod']['metadata']['labels']['job_uuid']
-        job_uuid = uuid.UUID(job_uuid)
-        create_job(job_uuid=job_uuid,
+    for i, worker_job_uuid in enumerate(spawner.job_uuids[TaskType.WORKER]):
+        create_job(job_uuid=worker_job_uuid,
                    experiment=experiment,
-                   definition=get_job_definition(worker),
                    role=TaskType.WORKER,
                    sequence=i,
                    resources=worker_resources.get(i),
@@ -233,15 +233,23 @@ def handle_horovod_experiment(experiment, spawner, response):
                    tolerations=worker_tolerations.get(i))
 
 
-def handle_pytorch_experiment(experiment, spawner, response):
-    # Get the number of jobs this experiment started
+def handle_horovod_experiment(response):
     master = response[TaskType.MASTER]
     job_uuid = master['pod']['metadata']['labels']['job_uuid']
     job_uuid = uuid.UUID(job_uuid)
 
-    create_job(job_uuid=job_uuid,
+    set_job_definition(job_uuid=job_uuid, definition=get_job_definition(master))
+
+    for worker in response[TaskType.WORKER]:
+        job_uuid = worker['pod']['metadata']['labels']['job_uuid']
+        job_uuid = uuid.UUID(job_uuid)
+        set_job_definition(job_uuid=job_uuid, definition=get_job_definition(worker))
+
+
+def create_pytorch_experiment_jobs(experiment, spawner):
+    master_job_uuid = spawner.job_uuids[TaskType.MASTER][0]
+    create_job(job_uuid=master_job_uuid,
                experiment=experiment,
-               definition=get_job_definition(master),
                resources=spawner.spec.master_resources,
                node_selector=spawner.spec.master_node_selector,
                affinity=spawner.spec.master_affinity,
@@ -269,12 +277,9 @@ def handle_pytorch_experiment(experiment, spawner, response):
         is_distributed=is_distributed
     )
 
-    for i, worker in enumerate(response[TaskType.WORKER]):
-        job_uuid = worker['pod']['metadata']['labels']['job_uuid']
-        job_uuid = uuid.UUID(job_uuid)
-        create_job(job_uuid=job_uuid,
+    for i, worker_job_uuid in enumerate(spawner.job_uuids[TaskType.WORKER]):
+        create_job(job_uuid=worker_job_uuid,
                    experiment=experiment,
-                   definition=get_job_definition(worker),
                    role=TaskType.WORKER,
                    sequence=i,
                    resources=worker_resources.get(i),
@@ -283,15 +288,23 @@ def handle_pytorch_experiment(experiment, spawner, response):
                    tolerations=worker_tolerations.get(i))
 
 
-def handle_mxnet_experiment(experiment, spawner, response):
-    # Get the number of jobs this experiment started
+def handle_pytorch_experiment(response):
     master = response[TaskType.MASTER]
     job_uuid = master['pod']['metadata']['labels']['job_uuid']
     job_uuid = uuid.UUID(job_uuid)
 
-    create_job(job_uuid=job_uuid,
+    set_job_definition(job_uuid=job_uuid, definition=get_job_definition(master))
+
+    for worker in response[TaskType.WORKER]:
+        job_uuid = worker['pod']['metadata']['labels']['job_uuid']
+        job_uuid = uuid.UUID(job_uuid)
+        set_job_definition(job_uuid=job_uuid, definition=get_job_definition(worker))
+
+
+def create_mxnet_experiment_jobs(experiment, spawner):
+    master_job_uuid = spawner.job_uuids[TaskType.MASTER][0]
+    create_job(job_uuid=master_job_uuid,
                experiment=experiment,
-               definition=get_job_definition(master),
                resources=spawner.spec.master_resources,
                node_selector=spawner.spec.master_node_selector,
                affinity=spawner.spec.master_affinity,
@@ -319,12 +332,9 @@ def handle_mxnet_experiment(experiment, spawner, response):
         is_distributed=is_distributed
     )
 
-    for i, worker in enumerate(response[TaskType.WORKER]):
-        job_uuid = worker['pod']['metadata']['labels']['job_uuid']
-        job_uuid = uuid.UUID(job_uuid)
-        create_job(job_uuid=job_uuid,
+    for i, worker_job_uuid in enumerate(spawner.job_uuids[TaskType.WORKER]):
+        create_job(job_uuid=worker_job_uuid,
                    experiment=experiment,
-                   definition=get_job_definition(worker),
                    role=TaskType.WORKER,
                    sequence=i,
                    resources=worker_resources.get(i),
@@ -352,12 +362,9 @@ def handle_mxnet_experiment(experiment, spawner, response):
         cluster=cluster,
         is_distributed=is_distributed
     )
-    for i, server in enumerate(response[TaskType.SERVER]):
-        job_uuid = server['pod']['metadata']['labels']['job_uuid']
-        job_uuid = uuid.UUID(job_uuid)
-        create_job(job_uuid=job_uuid,
+    for i, server_job_uuid in enumerate(spawner.job_uuids[TaskType.SERVER]):
+        create_job(job_uuid=server_job_uuid,
                    experiment=experiment,
-                   definition=get_job_definition(server),
                    role=TaskType.SERVER,
                    sequence=i,
                    resources=server_resources.get(i),
@@ -366,37 +373,76 @@ def handle_mxnet_experiment(experiment, spawner, response):
                    tolerations=server_tolerations)
 
 
-def handle_base_experiment(experiment, spawner, response):
-    # Default case only master was created by the experiment spawner
+def handle_mxnet_experiment(response):
     master = response[TaskType.MASTER]
     job_uuid = master['pod']['metadata']['labels']['job_uuid']
     job_uuid = uuid.UUID(job_uuid)
 
-    create_job(job_uuid=job_uuid,
+    set_job_definition(job_uuid=job_uuid, definition=get_job_definition(master))
+
+    for worker in response[TaskType.WORKER]:
+        job_uuid = worker['pod']['metadata']['labels']['job_uuid']
+        job_uuid = uuid.UUID(job_uuid)
+        set_job_definition(job_uuid=job_uuid, definition=get_job_definition(worker))
+
+    for server in response[TaskType.SERVER]:
+        job_uuid = server['pod']['metadata']['labels']['job_uuid']
+        job_uuid = uuid.UUID(job_uuid)
+        set_job_definition(job_uuid=job_uuid, definition=get_job_definition(server))
+
+
+def create_base_experiment_job(experiment, spawner):
+    master_job_uuid = spawner.job_uuids[TaskType.MASTER][0]
+    create_job(job_uuid=master_job_uuid,
                experiment=experiment,
-               definition=get_job_definition(master),
                resources=spawner.spec.master_resources,
                node_selector=spawner.spec.master_node_selector,
                affinity=spawner.spec.master_affinity,
                tolerations=spawner.spec.master_tolerations)
 
 
-def handle_experiment(experiment, spawner, response):
+def handle_base_experiment(response):
+    master = response[TaskType.MASTER]
+    job_uuid = master['pod']['metadata']['labels']['job_uuid']
+    job_uuid = uuid.UUID(job_uuid)
+
+    set_job_definition(job_uuid=job_uuid, definition=get_job_definition(master))
+
+
+def handle_experiment(experiment, response):
     framework = experiment.specification.framework
     if framework == Frameworks.TENSORFLOW:
-        handle_tensorflow_experiment(experiment=experiment, spawner=spawner, response=response)
+        handle_tensorflow_experiment(response=response)
         return
     if framework == Frameworks.HOROVOD:
-        handle_horovod_experiment(experiment=experiment, spawner=spawner, response=response)
+        handle_horovod_experiment(response=response)
         return
     if framework == Frameworks.MXNET:
-        handle_mxnet_experiment(experiment=experiment, spawner=spawner, response=response)
+        handle_mxnet_experiment(response=response)
         return
     if framework == Frameworks.PYTORCH:
-        handle_pytorch_experiment(experiment=experiment, spawner=spawner, response=response)
+        handle_pytorch_experiment(response=response)
         return
 
-    handle_base_experiment(experiment=experiment, spawner=spawner, response=response)
+    handle_base_experiment(response=response)
+
+
+def create_experiment_jobs(experiment, spawner):
+    framework = experiment.specification.framework
+    if framework == Frameworks.TENSORFLOW:
+        create_tensorflow_experiment_jobs(experiment=experiment, spawner=spawner)
+        return
+    if framework == Frameworks.HOROVOD:
+        create_horovod_experiment_jobs(experiment=experiment, spawner=spawner)
+        return
+    if framework == Frameworks.MXNET:
+        create_mxnet_experiment_jobs(experiment=experiment, spawner=spawner)
+        return
+    if framework == Frameworks.PYTORCH:
+        create_pytorch_experiment_jobs(experiment=experiment, spawner=spawner)
+        return
+
+    create_base_experiment_job(experiment=experiment, spawner=spawner)
 
 
 def start_experiment(experiment):
@@ -421,9 +467,9 @@ def start_experiment(experiment):
         _logger.info('Start experiment with default image.')
 
     spawner_class = get_spawner_class(experiment.specification.framework)
-    token_scope = RedisEphemeralTokens.get_scope(experiment.user.id,
-                                                 'experiment',
-                                                 experiment.id)
+    # token_scope = RedisEphemeralTokens.get_scope(experiment.user.id,
+    #                                              'experiment',
+    #                                              experiment.id)
 
     error = {}
     try:
@@ -444,11 +490,14 @@ def start_experiment(experiment):
                                 namespace=conf.get('K8S_NAMESPACE'),
                                 in_cluster=True,
                                 job_docker_image=job_docker_image,
-                                use_sidecar=True,
-                                sidecar_config=config.get_requested_data(to_str=True),
-                                token_scope=token_scope)
+                                use_sidecar=True)
+        # Create db jobs
+        create_experiment_jobs(experiment=experiment, spawner=spawner)
+        # Create k8s jobs
         response = spawner.start_experiment()
-        handle_experiment(experiment=experiment, spawner=spawner, response=response)
+        # handle response
+        handle_experiment(experiment=experiment, response=response)
+        experiment.set_status(ExperimentLifeCycle.STARTING)
     except ApiException as e:
         _logger.error('Could not start the experiment, please check your polyaxon spec.',
                       exc_info=True)
@@ -501,7 +550,5 @@ def stop_experiment(project_name,
                             spec=specification,
                             k8s_config=conf.get('K8S_CONFIG'),
                             namespace=conf.get('K8S_NAMESPACE'),
-                            in_cluster=True,
-                            use_sidecar=True,
-                            sidecar_config=config.get_requested_data(to_str=True))
+                            in_cluster=True)
     return spawner.stop_experiment()

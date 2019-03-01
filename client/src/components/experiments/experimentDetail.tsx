@@ -25,7 +25,6 @@ import Breadcrumb from '../breadcrumb';
 import { EmptyList } from '../empty/emptyList';
 import ExperimentInstructions from '../instructions/experimentInstructions';
 import LinkedTab from '../linkedTab';
-import RunEnv from '../runEnv';
 import YamlText from '../yamlText';
 import ExperimentActions from './experimentActions';
 import ExperimentOverview from './experimentOverview';
@@ -34,6 +33,8 @@ export interface Props {
   experiment: ExperimentModel;
   onDelete: () => actions.ExperimentAction;
   onUpdate: (updateDict: { [key: string]: any }) => actions.ExperimentAction;
+  onArchive: () => actions.ExperimentAction;
+  onRestore: () => actions.ExperimentAction;
   onStop: () => actions.ExperimentAction;
   fetchData: () => actions.ExperimentAction;
   bookmark: () => actions.ExperimentAction;
@@ -89,6 +90,8 @@ export default class ExperimentDetail extends React.Component<Props, {}> {
                 <ExperimentActions
                   onDelete={this.props.onDelete}
                   onStop={this.props.onStop}
+                  onArchive={experiment.deleted ? undefined : this.props.onArchive}
+                  onRestore={experiment.deleted ? this.props.onRestore : undefined}
                   tensorboardActionCallback={
                   experiment.has_tensorboard ? this.props.stopTensorboard : this.props.startTensorboard}
                   hasTensorboard={experiment.has_tensorboard}
@@ -106,6 +109,7 @@ export default class ExperimentDetail extends React.Component<Props, {}> {
                     experiment={experiment}
                     onUpdate={this.props.onUpdate}
                     onFetch={this.props.fetchData}
+                    onFetchCodeReference={this.props.fetchCodeReference}
                   />,
                   relUrl: ''
                 }, {
@@ -113,7 +117,6 @@ export default class ExperimentDetail extends React.Component<Props, {}> {
                   component: <Logs
                     fetchData={() => null}
                     logs={''}
-                    user={experiment.user}
                     project={experiment.project}
                     resource="experiments"
                     id={experiment.id}
@@ -127,19 +130,6 @@ export default class ExperimentDetail extends React.Component<Props, {}> {
                     experiment={experiment}
                   />,
                   relUrl: 'jobs'
-                }, {
-                  title: 'CodeRef',
-                  component: <CodeReference
-                    fetchData={this.props.fetchCodeReference}
-                    codeReferenceId={experiment.code_reference}
-                  />,
-                  relUrl: 'codeRef'
-                }, {
-                  title: 'RunEnv',
-                  component: <RunEnv
-                    runEnv={experiment.run_env}
-                  />,
-                  relUrl: 'build'
                 }, {
                   title: 'Build',
                   component: <EntityBuild buildName={experiment.build_job}/>,

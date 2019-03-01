@@ -35,15 +35,13 @@ def start_notebook(notebook):
         job_uuid=notebook.uuid.hex,
         k8s_config=conf.get('K8S_CONFIG'),
         namespace=conf.get('K8S_NAMESPACE'),
+        job_docker_image=job_docker_image,
         in_cluster=True)
 
     error = {}
     try:
-        allow_commits = False
-        if conf.get('REPOS_CLAIM_NAME') or notebook.node_selector:
-            allow_commits = True
-        results = spawner.start_notebook(image=job_docker_image,
-                                         persistence_outputs=notebook.persistence_outputs,
+        mount_code_in_notebooks = conf.get('MOUNT_CODE_IN_NOTEBOOKS')
+        results = spawner.start_notebook(persistence_outputs=notebook.persistence_outputs,
                                          persistence_data=notebook.persistence_data,
                                          outputs_refs_jobs=notebook.outputs_refs_jobs,
                                          outputs_refs_experiments=notebook.outputs_refs_experiments,
@@ -53,7 +51,8 @@ def start_notebook(notebook):
                                          node_selector=notebook.node_selector,
                                          affinity=notebook.affinity,
                                          tolerations=notebook.tolerations,
-                                         allow_commits=allow_commits)
+                                         backend=notebook.specification.backend,
+                                         mount_code_in_notebooks=mount_code_in_notebooks)
         notebook.definition = get_job_definition(results)
         notebook.save(update_fields=['definition'])
         return

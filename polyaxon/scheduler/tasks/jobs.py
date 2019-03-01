@@ -2,6 +2,8 @@ import logging
 
 from polystores.exceptions import PolyaxonStoresException
 
+import conf
+
 from constants.jobs import JobLifeCycle
 from db.getters.jobs import get_valid_job
 from db.redis.heartbeat import RedisHeartBeat
@@ -40,7 +42,8 @@ def jobs_build(job_id):
         # The image already exists, so we can start the experiment right away
         celery_app.send_task(
             SchedulerCeleryTasks.JOBS_START,
-            kwargs={'job_id': job_id})
+            kwargs={'job_id': job_id},
+            countdown=conf.get('GLOBAL_COUNTDOWN'))
         return
 
     if not build_status:
@@ -71,28 +74,35 @@ def jobs_start(job_id):
 
 
 @celery_app.task(name=SchedulerCeleryTasks.JOBS_SCHEDULE_DELETION, ignore_result=True)
-def jobs_schedule_deletion(job_id):
+def jobs_schedule_deletion(job_id, immediate=False):
     job = get_valid_job(job_id=job_id, include_deleted=True)
     if not job:
         return None
 
     job.archive()
 
-    if not job.is_running:
-        return
+    if job.is_stoppable:
+        project = job.project
+        celery_app.send_task(
+            SchedulerCeleryTasks.JOBS_STOP,
+            kwargs={
+                'project_name': project.unique_name,
+                'project_uuid': project.uuid.hex,
+                'job_name': job.unique_name,
+                'job_uuid': job.uuid.hex,
+                'update_status': True,
+                'collect_logs': False,
+                'message': 'Job is scheduled for deletion.'
+            },
+            countdown=conf.get('GLOBAL_COUNTDOWN'))
 
-    project = job.project
-    celery_app.send_task(
-        SchedulerCeleryTasks.JOBS_STOP,
-        kwargs={
-            'project_name': project.unique_name,
-            'project_uuid': project.uuid.hex,
-            'job_name': job.unique_name,
-            'job_uuid': job.uuid.hex,
-            'update_status': True,
-            'collect_logs': False,
-            'message': 'Job is scheduled for deletion.'
-        })
+    if immediate:
+        celery_app.send_task(
+            SchedulerCeleryTasks.DELETE_ARCHIVED_JOB,
+            kwargs={
+                'job_id': job_id,
+            },
+            countdown=conf.get('GLOBAL_COUNTDOWN'))
 
 
 @celery_app.task(name=SchedulerCeleryTasks.JOBS_STOP, bind=True, max_retries=3, ignore_result=True)

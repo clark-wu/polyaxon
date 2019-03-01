@@ -60,8 +60,8 @@ from factories.factory_jobs import JobFactory
 from factories.factory_projects import ProjectFactory
 from factories.fixtures import (
     exec_experiment_outputs_refs_parsed_content,
-    exec_experiment_spec_parsed_content
-)
+    exec_experiment_spec_parsed_content,
+    exec_experiment_resources_parsed_content)
 from schemas.specifications import ExperimentSpecification
 from tests.utils import BaseFilesViewTest, BaseViewTest, EphemeralClient
 
@@ -73,7 +73,7 @@ class TestProjectExperimentListViewV1(BaseViewTest):
     factory_class = ExperimentFactory
     num_objects = 3
     HAS_AUTH = True
-    DISABLE_RUNNER = True
+    DISABLE_EXECUTOR = False
 
     def setUp(self):
         super().setUp()
@@ -364,7 +364,7 @@ class TestProjectExperimentListViewV1(BaseViewTest):
         resp = self.auth_client.post(self.url, data)
         assert resp.status_code == status.HTTP_201_CREATED
         xp = Experiment.objects.last()
-        assert RedisTTL.get_for_experiment(xp.id) == 2
+        assert RedisTTL.get_for_experiment(xp.id) == conf.get('GLOBAL_COUNTDOWN')
 
         data = {'ttl': 10}
         resp = self.auth_client.post(self.url, data)
@@ -375,6 +375,21 @@ class TestProjectExperimentListViewV1(BaseViewTest):
         data = {'ttl': 'foo'}
         resp = self.auth_client.post(self.url, data)
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_create_in_cluster(self):
+        data = {}
+        resp = self.auth_client.post(self.url, data)
+        assert resp.status_code == status.HTTP_201_CREATED
+        xp = Experiment.objects.last()
+        assert xp.in_cluster is True
+        assert xp.run_env is None
+
+        data = {'in_cluster': False, 'run_env': {'foo': 'bar'}}
+        resp = self.auth_client.post(self.url, data)
+        assert resp.status_code == status.HTTP_201_CREATED
+        xp = Experiment.objects.last()
+        assert xp.in_cluster is False
+        assert xp.run_env == {'foo': 'bar'}
 
     def test_create(self):
         data = {'check_specification': True}
@@ -528,7 +543,6 @@ class TestProjectExperimentLastMetricListViewV1(BaseViewTest):
     factory_class = ExperimentFactory
     num_objects = 3
     HAS_AUTH = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -582,7 +596,6 @@ class TestExperimentGroupExperimentListViewV1(BaseViewTest):
     factory_class = ExperimentFactory
     num_objects = 3
     HAS_AUTH = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -702,7 +715,6 @@ class TestExperimentSelectionListViewV1(BaseViewTest):
     factory_class = ExperimentFactory
     num_objects = 3
     HAS_AUTH = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -802,6 +814,8 @@ class TestRunnerExperimentGroupExperimentListViewV1(BaseViewTest):
     factory_class = ExperimentFactory
     num_objects = 3
     HAS_AUTH = True
+    DISABLE_EXECUTOR = False
+    DISABLE_RUNNER = False
 
     def setUp(self):
         super().setUp()
@@ -949,11 +963,15 @@ class TestExperimentDetailViewV1(BaseViewTest):
     model_class = Experiment
     factory_class = ExperimentFactory
     HAS_AUTH = True
+    DISABLE_RUNNER = False
+    DISABLE_EXECUTOR = False
 
     def setUp(self):
         super().setUp()
         project = ProjectFactory(user=self.auth_client.user)
-        self.object = self.factory_class(project=project)
+        with patch('scheduler.dockerizer_scheduler.start_dockerizer') as spawner_mock_start:
+            self.object = self.factory_class(project=project)
+        assert spawner_mock_start.call_count == 1
         self.url = '/{}/{}/{}/experiments/{}/'.format(API_V1,
                                                       project.user.username,
                                                       project.name,
@@ -1019,7 +1037,7 @@ class TestExperimentDetailViewV1(BaseViewTest):
         exp_query = queries.experiments_details.get(id=exp.id)
         assert resp.data == self.serializer_class(exp_query).data
 
-    def test_patch_exp(self):
+    def test_patch_exp(self):  # pylint:disable=too-many-statements
         new_description = 'updated_xp_name'
         data = {'description': new_description}
         assert self.object.description != data['description']
@@ -1030,6 +1048,40 @@ class TestExperimentDetailViewV1(BaseViewTest):
         assert new_object.description != self.object.description
         assert new_object.description == new_description
         assert new_object.jobs.count() == 2
+
+        # path in_cluster
+        data = {'in_cluster': False}
+        assert self.object.in_cluster is True
+        resp = self.auth_client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.jobs.count() == 2
+        assert new_object.in_cluster is False
+
+        # path in_cluster
+        data = {'in_cluster': None}
+        assert new_object.in_cluster is False
+        resp = self.auth_client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.jobs.count() == 2
+        assert new_object.in_cluster is True
+
+        # path in_cluster
+        data = {'in_cluster': False}
+        assert new_object.in_cluster is True
+        resp = self.auth_client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.jobs.count() == 2
+        assert new_object.in_cluster is False
+
+        data = {'in_cluster': True}
+        resp = self.auth_client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.jobs.count() == 2
+        assert new_object.in_cluster is True
 
         # Update original experiment
         assert new_object.is_clone is False
@@ -1084,16 +1136,25 @@ class TestExperimentDetailViewV1(BaseViewTest):
         new_object = self.model_class.objects.get(id=self.object.id)
         assert new_object.declarations == {'foo_new': 'bar_new', 'foo': 'bar'}
 
+        # Update name
+        data = {'name': 'new_name'}
+        assert new_object.name is None
+        resp = self.auth_client.patch(self.url, data=data)
+        assert resp.status_code == status.HTTP_200_OK
+        new_object = self.model_class.objects.get(id=self.object.id)
+        assert new_object.name == data['name']
+
     def test_delete_from_created_status_archives_and_schedules_stop(self):
         assert self.model_class.objects.count() == 1
         assert ExperimentJob.objects.count() == 2
         with patch('scheduler.experiment_scheduler.stop_experiment') as spawner_mock_stop:
             resp = self.auth_client.delete(self.url)
-        assert spawner_mock_stop.call_count == 0
+        assert spawner_mock_stop.call_count == 1
         assert resp.status_code == status.HTTP_204_NO_CONTENT
+        # Deleted
         assert self.model_class.objects.count() == 0
-        assert self.model_class.all.count() == 1
-        assert ExperimentJob.objects.count() == 2
+        assert self.model_class.all.count() == 0
+        assert ExperimentJob.objects.count() == 0
 
     def test_delete_from_running_status_archives_and_schedules_stop(self):
         self.object.set_status(ExperimentLifeCycle.RUNNING)
@@ -1103,9 +1164,10 @@ class TestExperimentDetailViewV1(BaseViewTest):
             resp = self.auth_client.delete(self.url)
         assert spawner_mock_stop.call_count == 1
         assert resp.status_code == status.HTTP_204_NO_CONTENT
+        # Deleted
         assert self.model_class.objects.count() == 0
-        assert self.model_class.all.count() == 1
-        assert ExperimentJob.objects.count() == 2
+        assert self.model_class.all.count() == 0
+        assert ExperimentJob.objects.count() == 0
 
     def test_delete_archives_and_schedules_deletion(self):
         self.object.set_status(ExperimentLifeCycle.RUNNING)
@@ -1116,7 +1178,43 @@ class TestExperimentDetailViewV1(BaseViewTest):
             resp = self.auth_client.delete(self.url)
         assert spawner_mock_stop.call_count == 1
         assert resp.status_code == status.HTTP_204_NO_CONTENT
+        # Patched
         assert self.model_class.objects.count() == 0
+        assert self.model_class.all.count() == 1
+        assert ExperimentJob.objects.count() == 2
+
+    def test_archive_schedule_deletion(self):
+        self.object.set_status(ExperimentLifeCycle.RUNNING)
+        assert self.model_class.objects.count() == 1
+        assert ExperimentJob.objects.count() == 2
+        with patch('scheduler.tasks.experiments.'
+                   'experiments_schedule_deletion.apply_async') as spawner_mock_stop:
+            resp = self.auth_client.post(self.url + 'archive/')
+        assert resp.status_code == status.HTTP_200_OK
+        assert spawner_mock_stop.call_count == 1
+        assert self.model_class.objects.count() == 1
+        assert self.model_class.all.count() == 1
+
+    def test_archive_schedule_archives_and_schedules_stop(self):
+        self.object.set_status(ExperimentLifeCycle.RUNNING)
+        assert self.model_class.objects.count() == 1
+        assert ExperimentJob.objects.count() == 2
+        with patch('scheduler.tasks.experiments.'
+                   'experiments_stop.apply_async') as spawner_mock_stop:
+            resp = self.auth_client.post(self.url + 'archive/')
+        assert resp.status_code == status.HTTP_200_OK
+        assert spawner_mock_stop.call_count == 1
+        assert self.model_class.objects.count() == 0
+        assert self.model_class.all.count() == 1
+        assert ExperimentJob.objects.count() == 2
+
+    def test_restore(self):
+        self.object.archive()
+        assert self.model_class.objects.count() == 0
+        assert self.model_class.all.count() == 1
+        resp = self.auth_client.post(self.url + 'restore/')
+        assert resp.status_code == status.HTTP_200_OK
+        assert self.model_class.objects.count() == 1
         assert self.model_class.all.count() == 1
         assert ExperimentJob.objects.count() == 2
 
@@ -1126,7 +1224,6 @@ class TestExperimentCodeReferenceViewV1(BaseViewTest):
     serializer_class = CodeReferenceSerializer
     model_class = CodeReference
     factory_class = CodeReferenceFactory
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -1160,6 +1257,7 @@ class TestExperimentCodeReferenceViewV1(BaseViewTest):
         assert last_object.is_dirty is False
         assert last_object.git_url is None
         assert last_object.repo is None
+        assert last_object.external_repo is None
 
         data = {
             'commit': '3783ab36703b14b91b15736fe4302bfb8d52af1c',
@@ -1180,6 +1278,7 @@ class TestExperimentCodeReferenceViewV1(BaseViewTest):
         assert last_object.is_dirty is True
         assert last_object.git_url == 'https://bitbucket.org:foo/bar.git'
         assert last_object.repo is None
+        assert last_object.external_repo is None
 
 
 @pytest.mark.experiments_mark
@@ -1189,6 +1288,8 @@ class TestExperimentStatusListViewV1(BaseViewTest):
     factory_class = ExperimentStatusFactory
     num_objects = 3
     HAS_AUTH = True
+    HAS_INTERNAL = True
+    INTERNAL_SERVICE = InternalServices.SIDECAR
 
     def setUp(self):
         super().setUp()
@@ -1208,6 +1309,8 @@ class TestExperimentStatusListViewV1(BaseViewTest):
 
     def test_get(self):
         resp = self.auth_client.get(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        resp = self.internal_client.get(self.url)
         assert resp.status_code == status.HTTP_200_OK
 
         assert resp.data['next'] is None
@@ -1255,6 +1358,24 @@ class TestExperimentStatusListViewV1(BaseViewTest):
         assert last_object.experiment == self.experiment
         assert last_object.status == data['status']
 
+        # Create with message and traceback
+        data = {'status': ExperimentLifeCycle.FAILED,
+                'message': 'message1',
+                'traceback': 'traceback1'}
+        resp = self.auth_client.post(self.url, data)
+        assert resp.status_code == status.HTTP_201_CREATED
+        assert self.model_class.objects.count() == self.num_objects + 3
+        last_object = self.model_class.objects.last()
+        assert last_object.experiment == self.experiment
+        assert last_object.message == data['message']
+        assert last_object.traceback == data['traceback']
+
+        # Test internal
+        data = {}
+        resp = self.internal_client.post(self.url, data)
+        assert resp.status_code == status.HTTP_201_CREATED
+        assert self.model_class.objects.count() == self.num_objects + 4
+
 
 @pytest.mark.experiments_mark
 class TestExperimentMetricListViewV1(BaseViewTest):
@@ -1264,7 +1385,6 @@ class TestExperimentMetricListViewV1(BaseViewTest):
     num_objects = 3
     HAS_AUTH = True
     HAS_INTERNAL = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -1641,11 +1761,89 @@ class TestExperimentJobStatusDetailViewV1(BaseViewTest):
 
 
 @pytest.mark.experiments_mark
+class TestExperimentJobLogsViewV1(BaseViewTest):
+    num_log_lines = 10
+    HAS_AUTH = True
+
+    def setUp(self):
+        super().setUp()
+        project = ProjectFactory(user=self.auth_client.user)
+        self.experiment = ExperimentFactory(
+            project=project,
+            config=exec_experiment_resources_parsed_content.parsed_data)
+        self.experiment_job = ExperimentJobFactory(experiment=self.experiment)
+        self.logs = []
+        self.url = '/{}/{}/{}/experiments/{}/jobs/{}/logs'.format(
+            API_V1,
+            project.user.username,
+            project.name,
+            self.experiment.id,
+            self.experiment_job.id)
+
+    def create_logs(self, temp):
+        log_path = stores.get_experiment_job_logs_path(
+            experiment_job_name=self.experiment_job.unique_name,
+            temp=temp)
+        stores.create_experiment_job_logs_path(experiment_job_name=self.experiment_job.unique_name,
+                                               temp=temp)
+        fake = Faker()
+        self.logs = []
+        for _ in range(self.num_log_lines):
+            self.logs.append(fake.sentence())
+        with open(log_path, 'w') as file:
+            for line in self.logs:
+                file.write(line)
+                file.write('\n')
+
+    def test_get_done_experiment(self):
+        self.experiment.set_status(ExperimentLifeCycle.SUCCEEDED)
+        self.assertTrue(self.experiment.is_done)
+        # No logs
+        resp = self.auth_client.get(self.url)
+        assert resp.status_code == status.HTTP_404_NOT_FOUND
+        # Check the it does not return temp file
+        self.create_logs(temp=True)
+        resp = self.auth_client.get(self.url)
+        assert resp.status_code == status.HTTP_404_NOT_FOUND
+        # Check returns the correct file
+        self.create_logs(temp=False)
+        resp = self.auth_client.get(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+
+        data = [i for i in resp._iterator]  # pylint:disable=protected-access
+        data = [d for d in data[0].decode('utf-8').split('\n') if d]
+        assert len(data) == len(self.logs)
+        assert data == self.logs
+
+    @patch('api.experiments.views.process_experiment_job_logs')
+    def test_get_non_done_experiment(self, _):
+        self.assertFalse(self.experiment.is_done)
+        # No logs
+        resp = self.auth_client.get(self.url)
+        assert resp.status_code == status.HTTP_404_NOT_FOUND
+        # Check the it does not return non temp file
+        self.create_logs(temp=False)
+        resp = self.auth_client.get(self.url)
+        assert resp.status_code == status.HTTP_404_NOT_FOUND
+        # Check returns the correct file
+        self.create_logs(temp=True)
+        resp = self.auth_client.get(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+
+        data = [i for i in resp._iterator]  # pylint:disable=protected-access
+        data = [d for d in data[0].decode('utf-8').split('\n') if d]
+        assert len(data) == len(self.logs)
+        assert data == self.logs
+
+
+@pytest.mark.experiments_mark
 class TestRestartExperimentViewV1(BaseViewTest):
     serializer_class = ExperimentSerializer
     model_class = Experiment
     factory_class = ExperimentFactory
     HAS_AUTH = True
+    DISABLE_RUNNER = False
+    DISABLE_EXECUTOR = False
 
     def setUp(self):
         super().setUp()
@@ -1778,6 +1976,8 @@ class TestCopyExperimentViewV1(BaseViewTest):
     model_class = Experiment
     factory_class = ExperimentFactory
     HAS_AUTH = True
+    DISABLE_RUNNER = False
+    DISABLE_EXECUTOR = False
 
     def setUp(self):
         super().setUp()
@@ -1901,7 +2101,6 @@ class TestStopExperimentManyViewV1(BaseViewTest):
 class TestDeleteExperimentManyViewV1(BaseViewTest):
     model_class = Experiment
     factory_class = ExperimentFactory
-    DISABLE_RUNNER = True
     HAS_AUTH = True
 
     def setUp(self):
@@ -1931,7 +2130,6 @@ class TestDeleteExperimentManyViewV1(BaseViewTest):
 class TestExperimentLogsViewV1(BaseViewTest):
     num_log_lines = 10
     HAS_AUTH = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -2021,7 +2219,6 @@ class TestExperimentLogsViewV1(BaseViewTest):
 class TestExperimentOutputsTreeViewV1(BaseFilesViewTest):
     num_log_lines = 10
     HAS_AUTH = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -2061,11 +2258,10 @@ class TestExperimentOutputsTreeViewV1(BaseFilesViewTest):
         self.assert_same_content(resp.data['dirs'], self.second_level['dirs'])
 
 
-@pytest.mark.jobs_mark
+@pytest.mark.experiments_mark
 class TestExperimentOutputsFilesViewV1(BaseFilesViewTest):
     num_log_lines = 10
     HAS_AUTH = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -2107,7 +2303,6 @@ class DownloadExperimentOutputsViewTest(BaseViewTest):
     factory_class = ExperimentFactory
     HAS_AUTH = True
     HAS_INTERNAL = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -2142,10 +2337,9 @@ class DownloadExperimentOutputsViewTest(BaseViewTest):
                                                self.experiment.unique_name.replace('.', '_')))
 
 
-@pytest.mark.users_mark
-class TestExperimentTokenViewV1(BaseViewTest):
+@pytest.mark.experiments_mark
+class TestExperimentEphemeralTokenViewV1(BaseViewTest):
     HAS_AUTH = False
-    DISABLE_RUNNER = True
     factory_class = ExperimentFactory
 
     def setUp(self):
@@ -2154,12 +2348,12 @@ class TestExperimentTokenViewV1(BaseViewTest):
         self.project = ProjectFactory(user=self.auth_client.user)
         self.experiment = self.factory_class(project=self.project)
         self.other_experiment = self.factory_class(project=self.project)
-        self.url = '/{}/{}/{}/experiments/{}/token'.format(
+        self.url = '/{}/{}/{}/experiments/{}/ephemeraltoken'.format(
             API_V1,
             self.project.user.username,
             self.project.name,
             self.experiment.id)
-        self.other_url = '/{}/{}/{}/experiments/{}/token'.format(
+        self.other_url = '/{}/{}/{}/experiments/{}/ephemeraltoken'.format(
             API_V1,
             self.project.user.username,
             self.project.name,
@@ -2246,7 +2440,6 @@ class TestExperimentChartViewListViewV1(BaseViewTest):
     factory_class = ExperimentChartViewFactory
     num_objects = 3
     HAS_AUTH = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -2314,7 +2507,6 @@ class TestExperimentChartViewDetailViewV1(BaseViewTest):
     model_class = ExperimentChartView
     factory_class = ExperimentChartViewFactory
     HAS_AUTH = True
-    DISABLE_RUNNER = True
 
     def setUp(self):
         super().setUp()
@@ -2350,7 +2542,6 @@ class TestExperimentChartViewDetailViewV1(BaseViewTest):
 @pytest.mark.experiments_mark
 class TestExperimentHeartBeatViewV1(BaseViewTest):
     HAS_AUTH = True
-    DISABLE_RUNNER = True
     HAS_INTERNAL = True
     INTERNAL_SERVICE = InternalServices.SIDECAR
 

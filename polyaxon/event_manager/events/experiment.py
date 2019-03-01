@@ -9,6 +9,10 @@ EXPERIMENT_DELETED = '{}.{}'.format(event_subjects.EXPERIMENT,
                                     event_actions.DELETED)
 EXPERIMENT_VIEWED = '{}.{}'.format(event_subjects.EXPERIMENT,
                                    event_actions.VIEWED)
+EXPERIMENT_ARCHIVED = '{}.{}'.format(event_subjects.EXPERIMENT,
+                                     event_actions.ARCHIVED)
+EXPERIMENT_RESTORED = '{}.{}'.format(event_subjects.EXPERIMENT,
+                                     event_actions.RESTORED)
 EXPERIMENT_STOPPED = '{}.{}'.format(event_subjects.EXPERIMENT,
                                     event_actions.STOPPED)
 EXPERIMENT_RESUMED = '{}.{}'.format(event_subjects.EXPERIMENT,
@@ -46,6 +50,9 @@ EXPERIMENT_METRICS_VIEWED = '{}.{}'.format(event_subjects.EXPERIMENT,
 EXPERIMENT_DELETED_TRIGGERED = '{}.{}.{}'.format(event_subjects.EXPERIMENT,
                                                  event_actions.DELETED,
                                                  event_subjects.TRIGGER)
+EXPERIMENT_CLEANED_TRIGGERED = '{}.{}.{}'.format(event_subjects.EXPERIMENT,
+                                                 event_actions.CLEANED,
+                                                 event_subjects.TRIGGER)
 EXPERIMENT_STOPPED_TRIGGERED = '{}.{}.{}'.format(event_subjects.EXPERIMENT,
                                                  event_actions.STOPPED,
                                                  event_subjects.TRIGGER)
@@ -76,6 +83,9 @@ class ExperimentCreatedEvent(Event):
         Attribute('is_resume', attr_type=bool),
         Attribute('is_restart', attr_type=bool),
         Attribute('is_copy', attr_type=bool),
+        Attribute('is_clone', attr_type=bool),
+        Attribute('is_independent', attr_type=bool),
+        Attribute('has_specification', attr_type=bool),
         Attribute('framework', attr_type=bool, is_required=False),
     )
 
@@ -117,6 +127,34 @@ class ExperimentViewedEvent(Event):
         Attribute('has_description', attr_type=bool),
         Attribute('last_status'),
         Attribute('framework', attr_type=bool, is_required=False),
+    )
+
+
+class ExperimentArchivedEvent(Event):
+    event_type = EXPERIMENT_ARCHIVED
+    actor = True
+    attributes = (
+        Attribute('id'),
+        Attribute('project.id'),
+        Attribute('project.user.id'),
+        Attribute('experiment_group.id', is_required=False),
+        Attribute('experiment_group.user.id', is_required=False),
+        Attribute('user.id'),
+        Attribute('last_status'),
+    )
+
+
+class ExperimentRestoredEvent(Event):
+    event_type = EXPERIMENT_RESTORED
+    actor = True
+    attributes = (
+        Attribute('id'),
+        Attribute('project.id'),
+        Attribute('project.user.id'),
+        Attribute('experiment_group.id', is_required=False),
+        Attribute('experiment_group.user.id', is_required=False),
+        Attribute('user.id'),
+        Attribute('last_status'),
     )
 
 
@@ -362,6 +400,13 @@ class ExperimentDeletedTriggeredEvent(Event):
         Attribute('has_description', attr_type=bool),
         Attribute('last_status'),
         Attribute('framework', attr_type=bool, is_required=False),
+    )
+
+
+class ExperimentCleanedTriggeredEvent(Event):
+    event_type = EXPERIMENT_CLEANED_TRIGGERED
+    attributes = (
+        Attribute('id'),
     )
 
 

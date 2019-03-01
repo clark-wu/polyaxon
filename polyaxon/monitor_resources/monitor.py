@@ -3,9 +3,11 @@ import logging
 import re
 import requests
 
+from typing import Any, Dict, List, Mapping, Optional
+
 import docker
 
-from docker.errors import NotFound
+from docker.errors import DockerException, NotFound
 
 import conf
 import polyaxon_gpustat
@@ -18,17 +20,20 @@ from schemas.containers import ContainerResourcesConfig
 
 logger = logging.getLogger('polyaxon.monitors.resources')
 
-docker_client = docker.from_env(version="auto", timeout=10)
+try:
+    docker_client = docker.from_env(version="auto", timeout=10)
+except DockerException:
+    docker_client = None
 
 
-def get_gpu_resources():
+def get_gpu_resources() -> Any:
     try:
         return polyaxon_gpustat.query()
     except:  # noqa
         return []
 
 
-def get_container_gpu_indices(container):
+def get_container_gpu_indices(container: Any) -> List[int]:
     gpus = []
     devices = container.attrs['HostConfig']['Devices']
     for dev in devices:
@@ -38,7 +43,9 @@ def get_container_gpu_indices(container):
     return gpus
 
 
-def get_container(containers, container_id):
+def get_container(containers: Dict, container_id: str) -> Any:
+    if not docker_client:
+        return None
     try:  # we check first that the container is visible in this node
         container = docker_client.containers.get(container_id)
     except NotFound:
@@ -55,7 +62,9 @@ def get_container(containers, container_id):
     return container
 
 
-def get_container_resources(node, container, gpu_resources):
+def get_container_resources(node: 'ClusterNode',
+                            container: Any,
+                            gpu_resources: Mapping) -> Optional['ContainerResourcesConfig']:
     # Check if the container is running
     if container.status != ContainerStatuses.RUNNING:
         logger.debug("`%s` container is not running", container.name)
@@ -76,6 +85,7 @@ def get_container_resources(node, container, gpu_resources):
         stats = container.stats(decode=True, stream=False)
     except json.decoder.JSONDecodeError:
         logger.info("Error streaming states for `%s`", container.name)
+        return
     except NotFound:
         logger.debug("`%s` was not found", container.name)
         RedisJobContainers.remove_container(container.id)
@@ -128,7 +138,7 @@ def get_container_resources(node, container, gpu_resources):
     })
 
 
-def update_cluster_node(node_gpus):
+def update_cluster_node(node_gpus: Dict) -> None:
     if not node_gpus:
         return
     node = ClusterNode.objects.filter(name=conf.get('K8S_NODE_NAME')).first()
@@ -144,7 +154,7 @@ def update_cluster_node(node_gpus):
         node_gpu.save()
 
 
-def run(containers, node, persist):
+def run(containers: Dict, node: 'ClusterNode', persist: bool) -> None:
     container_ids = RedisJobContainers.get_containers()
     gpu_resources = get_gpu_resources()
     if gpu_resources:

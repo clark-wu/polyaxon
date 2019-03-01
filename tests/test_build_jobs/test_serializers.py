@@ -19,7 +19,6 @@ from tests.utils import BaseTest
 
 @pytest.mark.build_jobs_mark
 class TestBuildJobSerializer(BaseTest):
-    DISABLE_RUNNER = True
     serializer_class = BuildJobSerializer
     model_class = BuildJob
     factory_class = BuildJobFactory
@@ -37,6 +36,7 @@ class TestBuildJobSerializer(BaseTest):
         'started_at',
         'finished_at',
         'tags',
+        'backend',
         'project',
     }
 
@@ -115,7 +115,6 @@ class TestBookmarkedBuildJobSerializer(TestBuildJobSerializer):
 
 @pytest.mark.build_jobs_mark
 class TestBuildJobDetailSerializer(BaseTest):
-    DISABLE_RUNNER = True
     serializer_class = BuildJobDetailSerializer
     model_class = BuildJob
     factory_class = BuildJobFactory
@@ -132,6 +131,7 @@ class TestBuildJobDetailSerializer(BaseTest):
         'last_status',
         'description',
         'config',
+        'in_cluster',
         'tags',
         'started_at',
         'finished_at',
@@ -140,6 +140,7 @@ class TestBuildJobDetailSerializer(BaseTest):
         'num_jobs',
         'num_experiments',
         'dockerfile',
+        'backend',
         'commit',
         'bookmarked'
     }
@@ -205,7 +206,6 @@ class TestBuildJobDetailSerializer(BaseTest):
 
 @pytest.mark.build_jobs_mark
 class TestBuildJobStatusSerializer(BaseTest):
-    DISABLE_RUNNER = True
     serializer_class = BuildJobStatusSerializer
     model_class = BuildJobStatus
     factory_class = BuildJobStatusFactory

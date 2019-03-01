@@ -48,34 +48,60 @@ LOGGING = {
         },
     },
     'loggers': {
+        'celery': {
+            'handlers': config.log_handlers,
+            'level': config.log_level
+        },
         'polyaxon.streams': {
-            'handlers': ['console', ],
             'propagate': True,
+            'handlers': config.log_handlers,
             'level': config.log_level,
         },
         'polyaxon.monitors': {
-            'handlers': ['console', ],
             'propagate': True,
+            'handlers': config.log_handlers,
             'level': config.log_level,
         },
         'polyaxon.dockerizer': {
-            'handlers': ['console', ],
             'propagate': True,
-            'level': 'INFO' if config.is_staging_env else 'WARNING',
+            'handlers': config.log_handlers,
+            'level': config.log_level,
         },
         'django.request': {
-            'level': config.log_level,
             'propagate': True,
-            'handlers': ['console', ],
+            'handlers': config.log_handlers,
+            'level': config.log_level,
         },
+        'root': {
+            'handlers': config.log_handlers,
+            'level': config.log_level,
+        },
+        'sanic.error': {
+            'propagate': True,
+            'handlers': config.log_handlers,
+            'level': config.log_level,
+            'qualname': 'sanic.error'
+        },
+
+        'sanic.access': {
+            'propagate': True,
+            'handlers': config.log_handlers,
+            'level': config.log_level,
+            'qualname': 'sanic.access'
+        }
     },
 }
 
 RAVEN_CONFIG = {}
 if not (config.is_testing_env or config.is_local_env) and config.platform_dsn:
     RAVEN_CONFIG['dsn'] = config.platform_dsn
-    RAVEN_CONFIG['transport'] = "raven.transport.threaded_requests.ThreadedRequestsHTTPTransport"
+    RAVEN_CONFIG['transport'] = 'raven.transport.threaded_requests.ThreadedRequestsHTTPTransport'
     RAVEN_CONFIG['release'] = config.get_string('POLYAXON_CHART_VERSION',
                                                 is_optional=True,
                                                 default='0.0.0')
+    RAVEN_CONFIG['IGNORE_EXCEPTIONS'] = config.ignore_exceptions + [
+        'django.db.ProgrammingError',
+        'django.db.OperationalError',
+        'django.db.InterfaceError'
+    ]
     RAVEN_CONFIG['environment'] = config.env

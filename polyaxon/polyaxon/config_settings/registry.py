@@ -7,10 +7,23 @@ from polyaxon.config_manager import config
 
 REGISTRY_USER = config.get_string('POLYAXON_REGISTRY_USER', is_optional=True)
 REGISTRY_PASSWORD = config.get_string('POLYAXON_REGISTRY_PASSWORD', is_optional=True)
-REGISTRY_HOST_NAME = config.get_string('POLYAXON_REGISTRY_HOST', is_optional=True)
 REGISTRY_PORT = config.get_string('POLYAXON_REGISTRY_PORT', is_optional=True)
 REGISTRY_NODE_PORT = config.get_string('POLYAXON_REGISTRY_NODE_PORT', is_optional=True)
-REGISTRY_HOST = '{}:{}'.format('192.168.1.49', '5000')
+REGISTRY_HOST = config.get_string('POLYAXON_REGISTRY_HOST', is_optional=True)
+REGISTRY_IN_CLUSTER = config.get_boolean('POLYAXON_REGISTRY_IN_CLUSTER',
+                                         is_optional=True,
+                                         default=True)
+REGISTRY_LOCAL_URI = '{}:{}'.format('127.0.0.1', REGISTRY_NODE_PORT)
+
+REGISTRY_URI = None
+if REGISTRY_HOST:
+    if REGISTRY_PORT:
+        REGISTRY_URI = '{}:{}'.format(REGISTRY_HOST, REGISTRY_PORT)
+    else:
+        REGISTRY_URI = REGISTRY_HOST
+if not REGISTRY_URI:
+    REGISTRY_URI = REGISTRY_LOCAL_URI
+
 PRIVATE_REGISTRIES_PREFIX = 'POLYAXON_PRIVATE_REGISTRY_'
 
 

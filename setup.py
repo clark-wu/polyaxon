@@ -24,7 +24,7 @@ class PyTest(TestCommand):
 
 
 setup(name='polyaxon',
-      version='0.3.7',
+      version='0.4.1',
       description='A platform for reproducible and scalable deep learning and machine learning.',
       long_description=read_readme(),
       maintainer='Mourad Mourafiq',
@@ -49,7 +49,7 @@ setup(name='polyaxon',
       ],
       install_requires=[
           "celery==4.2.1",
-          "Django==2.1.3",
+          "Django==2.1.7",
           "django-cors-headers==2.4.0",
           "djangorestframework==3.8.2",
           "docker==3.5.1",

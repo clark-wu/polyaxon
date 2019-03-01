@@ -1,5 +1,7 @@
 import logging
 
+import conf
+
 from constants.experiment_groups import ExperimentGroupLifeCycle
 from constants.experiments import ExperimentLifeCycle
 from db.getters.experiment_groups import get_running_experiment_group, get_valid_experiment_group
@@ -74,7 +76,7 @@ def experiments_group_create(self, experiment_group_id):
 
 
 @celery_app.task(name=SchedulerCeleryTasks.EXPERIMENTS_GROUP_SCHEDULE_DELETION, ignore_result=True)
-def experiments_group_schedule_deletion(experiment_group_id):
+def experiments_group_schedule_deletion(experiment_group_id, immediate=False):
     experiment_group = get_valid_experiment_group(experiment_group_id=experiment_group_id,
                                                   include_deleted=True)
     if not experiment_group:
@@ -83,17 +85,44 @@ def experiments_group_schedule_deletion(experiment_group_id):
 
     experiment_group.archive()
 
-    if not experiment_group.is_running:
+    if experiment_group.is_stoppable:
+        celery_app.send_task(
+            SchedulerCeleryTasks.EXPERIMENTS_GROUP_STOP,
+            kwargs={
+                'experiment_group_id': experiment_group_id,
+                'collect_logs': False,
+                'message': 'Experiment Group is scheduled for deletion.'
+            },
+            countdown=conf.get('GLOBAL_COUNTDOWN'))
+
+    if immediate:
+        celery_app.send_task(
+            SchedulerCeleryTasks.DELETE_ARCHIVED_EXPERIMENT_GROUP,
+            kwargs={
+                'group_id': experiment_group_id,
+            },
+            countdown=conf.get('GLOBAL_COUNTDOWN'))
+
+
+@celery_app.task(name=SchedulerCeleryTasks.EXPERIMENTS_GROUP_STOP, ignore_result=True)
+def experiments_group_stop(experiment_group_id,
+                           collect_logs=True,
+                           message=None):
+    experiment_group = get_running_experiment_group(experiment_group_id=experiment_group_id,
+                                                    include_deleted=True)
+    if not experiment_group:
         return
 
+    experiment_group.set_status(ExperimentGroupLifeCycle.STOPPING)
     celery_app.send_task(
         SchedulerCeleryTasks.EXPERIMENTS_GROUP_STOP_EXPERIMENTS,
         kwargs={
             'experiment_group_id': experiment_group_id,
             'pending': False,
-            'collect_logs': False,
-            'message': 'Experiment Group is scheduled for deletion.'
-        })
+            'collect_logs': collect_logs,
+            'message': message
+        },
+        countdown=conf.get('GLOBAL_COUNTDOWN'))
 
 
 @celery_app.task(name=SchedulerCeleryTasks.EXPERIMENTS_GROUP_STOP_EXPERIMENTS, ignore_result=True)
@@ -108,14 +137,14 @@ def experiments_group_stop_experiments(experiment_group_id,
 
     if pending:
         # this won't work for archived groups anyways!
-        for experiment in experiment_group.pending_experiments:
+        for experiment in experiment_group.pending_experiments.iterator():
             # Update experiment status to show that its stopped
             experiment.set_status(status=ExperimentLifeCycle.STOPPED, message=message)
     else:
         experiments = experiment_group.all_experiments.exclude(
-            status__status__in=ExperimentLifeCycle.DONE_STATUS).distinct()
+            status__status__in=ExperimentLifeCycle.DONE_STATUS).distinct().iterator()
         for experiment in experiments:
-            if experiment.is_running:
+            if experiment.is_stoppable:
                 celery_app.send_task(
                     SchedulerCeleryTasks.EXPERIMENTS_STOP,
                     kwargs={
@@ -128,7 +157,8 @@ def experiments_group_stop_experiments(experiment_group_id,
                         'specification': experiment.config,
                         'update_status': True,
                         'collect_logs': collect_logs
-                    })
+                    },
+                    countdown=conf.get('GLOBAL_COUNTDOWN'))
             else:
                 # Update experiment status to show that its stopped
                 experiment.set_status(status=ExperimentLifeCycle.STOPPED, message=message)

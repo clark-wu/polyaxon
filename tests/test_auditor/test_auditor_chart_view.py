@@ -4,10 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-import activitylogs
 import auditor
-import notifier
-import tracker
 
 from db.models.experiment_groups import ExperimentGroupChartView
 from db.models.experiments import ExperimentChartView
@@ -20,28 +17,23 @@ from tests.utils import BaseTest
 @pytest.mark.auditor_mark
 class AuditorChartViewsTest(BaseTest):
     """Testing subscribed events"""
-    DISABLE_RUNNER = True
+    DISABLE_AUDITOR = False
+    DISABLE_EXECUTOR = False
 
     def setUp(self):
         super().setUp()
         self.experiment = ExperimentFactory()
         self.experiment_group = ExperimentGroupFactory()
-        auditor.validate()
-        auditor.setup()
-        tracker.validate()
-        tracker.setup()
-        activitylogs.validate()
-        activitylogs.setup()
-        notifier.validate()
-        notifier.setup()
 
+    @patch('executor.service.ExecutorService.record_event')
     @patch('notifier.service.NotifierService.record_event')
     @patch('tracker.service.TrackerService.record_event')
     @patch('activitylogs.service.ActivityLogService.record_event')
     def test_experiment_chart_view_created(self,
                                            activitylogs_record,
                                            tracker_record,
-                                           notifier_record):
+                                           notifier_record,
+                                           executor_record):
         chart_view = ExperimentChartView.objects.create(
             experiment=self.experiment,
             charts={}
@@ -55,14 +47,17 @@ class AuditorChartViewsTest(BaseTest):
         assert tracker_record.call_count == 1
         assert activitylogs_record.call_count == 1
         assert notifier_record.call_count == 0
+        assert executor_record.call_count == 0
 
+    @patch('executor.service.ExecutorService.record_event')
     @patch('notifier.service.NotifierService.record_event')
     @patch('tracker.service.TrackerService.record_event')
     @patch('activitylogs.service.ActivityLogService.record_event')
     def test_experiment_group_chart_view_created(self,
                                                  activitylogs_record,
                                                  tracker_record,
-                                                 notifier_record):
+                                                 notifier_record,
+                                                 executor_record):
         chart_view = ExperimentGroupChartView.objects.create(
             experiment_group=self.experiment_group,
             charts={}
@@ -76,14 +71,17 @@ class AuditorChartViewsTest(BaseTest):
         assert tracker_record.call_count == 1
         assert activitylogs_record.call_count == 1
         assert notifier_record.call_count == 0
+        assert executor_record.call_count == 0
 
+    @patch('executor.service.ExecutorService.record_event')
     @patch('notifier.service.NotifierService.record_event')
     @patch('tracker.service.TrackerService.record_event')
     @patch('activitylogs.service.ActivityLogService.record_event')
     def test_experiment_chart_view_deleted(self,
                                            activitylogs_record,
                                            tracker_record,
-                                           notifier_record):
+                                           notifier_record,
+                                           executor_record):
         chart_view = ExperimentChartView.objects.create(
             experiment=self.experiment,
             charts={}
@@ -97,14 +95,17 @@ class AuditorChartViewsTest(BaseTest):
         assert tracker_record.call_count == 1
         assert activitylogs_record.call_count == 1
         assert notifier_record.call_count == 0
+        assert executor_record.call_count == 0
 
+    @patch('executor.service.ExecutorService.record_event')
     @patch('notifier.service.NotifierService.record_event')
     @patch('tracker.service.TrackerService.record_event')
     @patch('activitylogs.service.ActivityLogService.record_event')
     def test_experiment_group_chart_view_deleted(self,
                                                  activitylogs_record,
                                                  tracker_record,
-                                                 notifier_record):
+                                                 notifier_record,
+                                                 executor_record):
         chart_view = ExperimentGroupChartView.objects.create(
             experiment_group=self.experiment_group,
             charts={}
@@ -118,3 +119,4 @@ class AuditorChartViewsTest(BaseTest):
         assert tracker_record.call_count == 1
         assert activitylogs_record.call_count == 1
         assert notifier_record.call_count == 0
+        assert executor_record.call_count == 0

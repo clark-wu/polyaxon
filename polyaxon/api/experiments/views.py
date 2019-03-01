@@ -1,8 +1,6 @@
 import logging
-import mimetypes
 import os
-
-from wsgiref.util import FileWrapper
+from typing import Optional
 
 from hestia.bool_utils import to_bool
 from polystores.exceptions import PolyaxonStoresException
@@ -13,9 +11,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.settings import api_settings
 
-from django.http import StreamingHttpResponse
-
 import auditor
+import conf
 import stores
 
 from api.code_reference.serializers import CodeReferenceSerializer
@@ -55,6 +52,7 @@ from api.experiments.serializers import (
 )
 from api.filters import OrderingFilter, QueryFilter
 from api.paginator import LargeLimitOffsetPagination
+from api.utils.files import stream_file
 from api.utils.gzip import gzip
 from api.utils.views.bookmarks_mixin import BookmarkedListMixinView
 from api.utils.views.protected import ProtectedView
@@ -73,14 +71,15 @@ from db.redis.heartbeat import RedisHeartBeat
 from db.redis.tll import RedisTTL
 from event_manager.events.chart_view import CHART_VIEW_CREATED, CHART_VIEW_DELETED
 from event_manager.events.experiment import (
+    EXPERIMENT_ARCHIVED,
     EXPERIMENT_COPIED_TRIGGERED,
-    EXPERIMENT_CREATED,
     EXPERIMENT_DELETED_TRIGGERED,
     EXPERIMENT_JOBS_VIEWED,
     EXPERIMENT_LOGS_VIEWED,
     EXPERIMENT_METRICS_VIEWED,
     EXPERIMENT_OUTPUTS_DOWNLOADED,
     EXPERIMENT_RESTARTED_TRIGGERED,
+    EXPERIMENT_RESTORED,
     EXPERIMENT_RESUMED_TRIGGERED,
     EXPERIMENT_STATUSES_VIEWED,
     EXPERIMENT_STOPPED_TRIGGERED,
@@ -96,12 +95,14 @@ from event_manager.events.project import PROJECT_EXPERIMENTS_VIEWED
 from libs.archive import archive_logs_file, archive_outputs, archive_outputs_file
 from libs.spec_validation import validate_experiment_spec_config
 from logs_handlers.log_queries.experiment import process_logs
+from logs_handlers.log_queries.experiment_job import process_logs as process_experiment_job_logs
 from polyaxon.celery_api import celery_app
 from polyaxon.settings import LogsCeleryTasks, SchedulerCeleryTasks
+from schemas.tasks import TaskType
 from scopes.authentication.ephemeral import EphemeralAuthentication
 from scopes.authentication.internal import InternalAuthentication
 from scopes.permissions.ephemeral import IsEphemeral
-from scopes.permissions.internal import IsAuthenticatedOrInternal
+from scopes.permissions.internal import IsAuthenticatedOrInternal, IsInitializer
 from scopes.permissions.projects import get_permissible_project
 from stores.exceptions import VolumeNotFoundError  # noqa
 
@@ -214,7 +215,6 @@ class ProjectExperimentListView(BookmarkedListMixinView,
         instance = serializer.save(user=self.request.user, project=self.project)
         if group and group.is_selection:  # Add the experiment to the group selection
             group.selection_experiments.add(instance)
-        auditor.record(event_type=EXPERIMENT_CREATED, instance=instance)
         if ttl:
             RedisTTL.set_for_experiment(experiment_id=instance.id, value=ttl)
 
@@ -247,7 +247,40 @@ class ExperimentDetailView(ExperimentEndpoint,
         instance.archive()
         celery_app.send_task(
             SchedulerCeleryTasks.EXPERIMENTS_SCHEDULE_DELETION,
-            kwargs={'experiment_id': instance.id})
+            kwargs={'experiment_id': instance.id, 'immediate': True},
+            countdown=conf.get('GLOBAL_COUNTDOWN'))
+
+
+class ExperimentArchiveView(ExperimentEndpoint, CreateEndpoint):
+    """Restore an experiment."""
+    serializer_class = ExperimentSerializer
+
+    def post(self, request, *args, **kwargs):
+        obj = self.get_object()
+        auditor.record(event_type=EXPERIMENT_ARCHIVED,
+                       instance=obj,
+                       actor_id=request.user.id,
+                       actor_name=request.user.username)
+        celery_app.send_task(
+            SchedulerCeleryTasks.EXPERIMENTS_SCHEDULE_DELETION,
+            kwargs={'experiment_id': obj.id, 'immediate': False},
+            countdown=conf.get('GLOBAL_COUNTDOWN'))
+        return Response(status=status.HTTP_200_OK)
+
+
+class ExperimentRestoreView(ExperimentEndpoint, CreateEndpoint):
+    """Restore an experiment."""
+    queryset = Experiment.all
+    serializer_class = ExperimentSerializer
+
+    def post(self, request, *args, **kwargs):
+        obj = self.get_object()
+        auditor.record(event_type=EXPERIMENT_RESTORED,
+                       instance=obj,
+                       actor_id=request.user.id,
+                       actor_name=request.user.username)
+        obj.restore()
+        return Response(status=status.HTTP_200_OK)
 
 
 class ExperimentCloneView(ExperimentEndpoint, CreateEndpoint):
@@ -428,21 +461,9 @@ class ExperimentOutputsFilesView(ExperimentEndpoint, RetrieveEndpoint):
 
         if not download_filepath:
             return Response(status=status.HTTP_404_NOT_FOUND,
-                            data='Log file not found: log_path={}'.format(download_filepath))
-
-        filename = os.path.basename(download_filepath)
-        chunk_size = 8192
-        try:
-            wrapped_file = FileWrapper(open(download_filepath, 'rb'), chunk_size)
-            response = StreamingHttpResponse(
-                wrapped_file, content_type=mimetypes.guess_type(download_filepath)[0])
-            response['Content-Length'] = os.path.getsize(download_filepath)
-            response['Content-Disposition'] = "attachment; filename={}".format(filename)
-            return response
-        except FileNotFoundError:
-            _logger.warning('Outputs file not found: log_path=%s', download_filepath)
-            return Response(status=status.HTTP_404_NOT_FOUND,
                             data='Outputs file not found: log_path={}'.format(download_filepath))
+
+        return stream_file(file_path=download_filepath, logger=_logger)
 
 
 class ExperimentStatusListView(ExperimentResourceListEndpoint,
@@ -456,6 +477,9 @@ class ExperimentStatusListView(ExperimentResourceListEndpoint,
     """
     queryset = ExperimentStatus.objects.order_by('created_at')
     serializer_class = ExperimentStatusSerializer
+    authentication_classes = api_settings.DEFAULT_AUTHENTICATION_CLASSES + [
+        InternalAuthentication,
+    ]
 
     def perform_create(self, serializer):
         serializer.save(experiment=self.experiment)
@@ -502,7 +526,8 @@ class ExperimentMetricListView(ExperimentResourceEndpoint,
                 kwargs={
                     'experiment_id': self.experiment.id,
                     'data': request.data
-                })
+                },
+                countdown=conf.get('GLOBAL_COUNTDOWN'))
             return Response(status=status.HTTP_201_CREATED)
 
         serializer = self.get_serializer(data=request.data)
@@ -569,6 +594,40 @@ class ExperimentJobDetailView(ExperimentJobEndpoint,
     AUDITOR_EVENT_TYPES = {'GET': EXPERIMENT_JOB_VIEWED}
 
 
+def get_experiment_logs_path(experiment: Experiment) -> Optional[str]:
+    experiment_name = experiment.unique_name
+    if experiment.is_done:
+        log_path = stores.get_experiment_logs_path(experiment_name=experiment_name, temp=False)
+        logs_path = archive_logs_file(
+            log_path=log_path,
+            namepath=experiment_name)
+    elif experiment.in_cluster:
+        process_logs(experiment=experiment, temp=True)
+        logs_path = stores.get_experiment_logs_path(experiment_name=experiment_name, temp=True)
+    else:
+        return None
+
+    return logs_path
+
+
+def get_experiment_job_logs_path(experiment: Experiment, job: ExperimentJob) -> Optional[str]:
+    if not job:
+        return None
+    job_name = job.unique_name
+    if experiment.is_done:
+        log_path = stores.get_experiment_job_logs_path(experiment_job_name=job_name, temp=False)
+        logs_path = archive_logs_file(
+            log_path=log_path,
+            namepath=job_name)
+    elif experiment.in_cluster:
+        process_experiment_job_logs(experiment_job=job, temp=True)
+        logs_path = stores.get_experiment_job_logs_path(experiment_job_name=job_name, temp=True)
+    else:
+        logs_path = None
+
+    return logs_path
+
+
 class ExperimentLogsView(ExperimentEndpoint, RetrieveEndpoint, PostEndpoint):
     """
     get:
@@ -582,32 +641,16 @@ class ExperimentLogsView(ExperimentEndpoint, RetrieveEndpoint, PostEndpoint):
                        instance=self.experiment,
                        actor_id=request.user.id,
                        actor_name=request.user.username)
-        experiment_name = self.experiment.unique_name
-        if self.experiment.is_done:
-            log_path = stores.get_experiment_logs_path(experiment_name=experiment_name, temp=False)
-            log_path = archive_logs_file(
-                log_path=log_path,
-                namepath=experiment_name)
-        elif self.experiment.run_env and self.experiment.run_env.get('in_cluster'):
-            process_logs(experiment=self.experiment, temp=True)
-            log_path = stores.get_experiment_logs_path(experiment_name=experiment_name, temp=True)
+        if self.experiment.is_distributed:
+            job = self.experiment.jobs.filter(role=TaskType.MASTER).first()
+            logs_path = get_experiment_job_logs_path(experiment=self.experiment, job=job)
         else:
+            logs_path = get_experiment_logs_path(experiment=self.experiment)
+        if not logs_path:
             return Response(status=status.HTTP_404_NOT_FOUND,
-                            data='Experiment is still running, no logs.')
+                            data='Experiment has no logs.')
 
-        filename = os.path.basename(log_path)
-        chunk_size = 8192
-        try:
-            wrapped_file = FileWrapper(open(log_path, 'rb'), chunk_size)
-            response = StreamingHttpResponse(wrapped_file,
-                                             content_type=mimetypes.guess_type(log_path)[0])
-            response['Content-Length'] = os.path.getsize(log_path)
-            response['Content-Disposition'] = "attachment; filename={}".format(filename)
-            return response
-        except FileNotFoundError:
-            _logger.warning('Log file not found: log_path=%s', log_path)
-            return Response(status=status.HTTP_404_NOT_FOUND,
-                            data='Log file not found: log_path={}'.format(log_path))
+        return stream_file(file_path=logs_path, logger=_logger)
 
     def post(self, request, *args, **kwargs):
         log_lines = request.data
@@ -703,6 +746,36 @@ class ExperimentJobStatusDetailView(ExperimentJobResourceEndpoint,
     lookup_url_kwarg = 'uuid'
 
 
+class ExperimentJobLogsView(ExperimentJobResourceEndpoint,
+                            RetrieveEndpoint,
+                            UpdateEndpoint):
+    """
+    get:
+        Get experiment job status details.
+    patch:
+        Update an experiment job status details.
+    """
+    queryset = ExperimentJobStatus.objects
+    serializer_class = ExperimentJobStatusSerializer
+    lookup_field = 'uuid'
+    lookup_url_kwarg = 'uuid'
+
+    def get(self, request, *args, **kwargs):
+        auditor.record(event_type=EXPERIMENT_LOGS_VIEWED,
+                       instance=self.experiment,
+                       actor_id=request.user.id,
+                       actor_name=request.user.username)
+        if self.experiment.is_distributed:
+            logs_path = get_experiment_job_logs_path(experiment=self.experiment, job=self.job)
+        else:
+            logs_path = get_experiment_logs_path(experiment=self.experiment)
+        if not logs_path:
+            return Response(status=status.HTTP_404_NOT_FOUND,
+                            data='Experiment has no logs.')
+
+        return stream_file(file_path=logs_path, logger=_logger)
+
+
 class ExperimentStopView(ExperimentEndpoint, CreateEndpoint):
     """Stop an experiment."""
     serializer_class = ExperimentSerializer
@@ -726,7 +799,8 @@ class ExperimentStopView(ExperimentEndpoint, CreateEndpoint):
                 'specification': obj.config,
                 'update_status': True,
                 'collect_logs': True,
-            })
+            },
+            countdown=conf.get('GLOBAL_COUNTDOWN'))
         return Response(status=status.HTTP_200_OK)
 
 
@@ -755,7 +829,8 @@ class ExperimentStopManyView(ProjectResourceListEndpoint, PostEndpoint):
                     'specification': experiment.config,
                     'update_status': True,
                     'collect_logs': True,
-                })
+                },
+                countdown=conf.get('GLOBAL_COUNTDOWN'))
         return Response(status=status.HTTP_200_OK)
 
 
@@ -795,7 +870,7 @@ class ExperimentDownloadOutputsView(ExperimentEndpoint, ProtectedView):
         return self.redirect(path='{}/{}'.format(archived_path, archive_name))
 
 
-class ExperimentScopeTokenView(ExperimentEndpoint, PostEndpoint):
+class ExperimentEphemeralTokenView(ExperimentEndpoint, PostEndpoint):
     """Validate scope token and return user's token."""
     authentication_classes = [EphemeralAuthentication, ]
     permission_classes = (IsEphemeral,)
@@ -819,6 +894,23 @@ class ExperimentScopeTokenView(ExperimentEndpoint, PostEndpoint):
                                                model='experiment',
                                                object_id=experiment.id)
         if sorted(user.scope) != sorted(scope):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+
+        token, _ = Token.objects.get_or_create(user=experiment.user)
+        return Response({'token': token.key}, status=status.HTTP_200_OK)
+
+
+class ExperimentImpersonateTokenView(ExperimentEndpoint, PostEndpoint):
+    """Impersonate a user and return user's token."""
+    authentication_classes = [InternalAuthentication, ]
+    permission_classes = (IsInitializer,)
+    throttle_scope = 'impersonate'
+    lookup_url_kwarg = 'experiment_id'
+
+    def post(self, request, *args, **kwargs):
+        experiment = self.get_object()
+
+        if not ExperimentLifeCycle.is_stoppable(experiment.last_status):
             return Response(status=status.HTTP_403_FORBIDDEN)
 
         token, _ = Token.objects.get_or_create(user=experiment.user)

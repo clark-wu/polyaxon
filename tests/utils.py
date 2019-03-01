@@ -20,7 +20,12 @@ from django.core.cache import cache
 from django.test import Client, TestCase
 from django.test.client import FakePayload
 
+import activitylogs
+import auditor
 import conf
+import executor
+import notifier
+import tracker
 
 from db.models.tokens import Token
 from factories.factory_users import UserFactory
@@ -206,7 +211,9 @@ class AuthorizedClient(BaseClient):
 
 
 class BaseTest(TestCase):
-    DISABLE_RUNNER = False
+    DISABLE_RUNNER = True
+    DISABLE_EXECUTOR = True
+    DISABLE_AUDITOR = True
 
     def setUp(self):
         # Force tasks autodiscover
@@ -214,7 +221,6 @@ class BaseTest(TestCase):
         from hpsearch.tasks import bo, grid, health, hyperband, random  # noqa
         from pipelines import health, tasks  # noqa
         from crons import tasks  # noqa
-        from dockerizer import tasks  # noqa
         from events_handlers import tasks  # noqa
         from k8s_events_handlers import tasks  # noqa
         from logs_handlers import tasks  # noqa
@@ -230,24 +236,33 @@ class BaseTest(TestCase):
         settings.REPOS_ARCHIVE_ROOT = tempfile.mkdtemp()
         settings.OUTPUTS_ARCHIVE_ROOT = tempfile.mkdtemp()
         settings.OUTPUTS_DOWNLOAD_ROOT = tempfile.mkdtemp()
-        settings.LOGSS_DOWNLOAD_ROOT = tempfile.mkdtemp()
+        settings.LOGS_DOWNLOAD_ROOT = tempfile.mkdtemp()
         settings.LOGS_ARCHIVE_ROOT = tempfile.mkdtemp()
         # Flush cache
         cache.clear()
         # Mock celery default sent task
         self.mock_send_task()
-        self.disable_docker_api()
 
         if self.DISABLE_RUNNER:
             self.disable_experiment_groups_runner()
             self.disable_experiments_runner()
             self.plugin_jobs_runner()
-        return super().setUp()
 
-    def disable_docker_api(self):
-        patcher = patch('scheduler.dockerizer_scheduler.check_image')
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        if not self.DISABLE_EXECUTOR or not self.DISABLE_AUDITOR:
+            auditor.validate()
+            auditor.setup()
+        if not self.DISABLE_AUDITOR:
+            tracker.validate()
+            tracker.setup()
+            activitylogs.validate()
+            activitylogs.setup()
+            notifier.validate()
+            notifier.setup()
+        if not self.DISABLE_EXECUTOR:
+            executor.validate()
+            executor.setup()
+
+        return super().setUp()
 
     def mock_send_task(self):
         from celery import current_app

@@ -11,8 +11,6 @@ from tests.utils import BaseTest
 
 @pytest.mark.paths_mark
 class TestJobPaths(BaseTest):
-    DISABLE_RUNNER = True
-
     def test_job_logs_path_creation_deletion(self):
         job = JobFactory()
         job_logs_path = stores.get_job_logs_path(job_name=job.unique_name, temp=False)
@@ -32,5 +30,5 @@ class TestJobPaths(BaseTest):
             persistence=job.persistence_outputs,
             job_name=job.unique_name)
         assert os.path.exists(job_outputs_path) is True
-        stores_schedule_outputs_deletion(persistence=None, subpath=job.subpath)
+        stores_schedule_outputs_deletion(persistence='outputs', subpath=job.subpath)
         assert os.path.exists(job_outputs_path) is False

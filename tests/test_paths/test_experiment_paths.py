@@ -11,8 +11,6 @@ from tests.utils import BaseTest
 
 @pytest.mark.paths_mark
 class TestExperimentPaths(BaseTest):
-    DISABLE_RUNNER = True
-
     def setUp(self):
         super().setUp()
         self.experiment = ExperimentFactory()
@@ -40,5 +38,5 @@ class TestExperimentPaths(BaseTest):
             persistence=self.experiment.persistence_outputs,
             experiment_name=self.experiment.unique_name)
         assert os.path.exists(experiment_outputs_path) is True
-        stores_schedule_outputs_deletion(persistence=None, subpath=self.experiment.subpath)
+        stores_schedule_outputs_deletion(persistence='outputs', subpath=self.experiment.subpath)
         assert os.path.exists(experiment_outputs_path) is False
